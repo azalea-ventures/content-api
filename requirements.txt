@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard] # ASGI server for FastAPI
+google-auth
+google-api-python-client
+google-generativeai
+PyMuPDF
+pydantic # For data validation in FastAPI
+python-dotenv # For local development configuration (optional)
