@@ -1,129 +1,140 @@
-# models.py
+# In models.py
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Optional, Any, Dict
 
-# --- Pydantic Models ---
+# --- SHARED MODELS (Used by /enhance and potentially others) ---
 
-# Shared model for section info (used in /analyze output)
-class SectionInfo(BaseModel):
+class PromptItem(BaseModel):
+    """Defines a single prompt to be processed."""
+    prompt_name: str
+    prompt_template: str
+    lesson_properties_to_append: List[str] = Field(default_factory=list)
+    # No 'order' or 'depends_on' for implicit, data-driven ordering
+
+class GeneratedContentItem(BaseModel):
+    """Represents a piece of content generated for a specific prompt."""
+    prompt_name: str
+    output: Optional[str] = None # The generated text/JSON string
+    status: Optional[str] = None # e.g., "SUCCESS", "RATE_LIMIT", "DATA_DEPENDENCY_PENDING"
+
+# --- NEW HIERARCHICAL MODELS FOR LESSON STRUCTURE (for /enhance) ---
+
+class Slide(BaseModel):
+    """Represents a single slide within a lesson section."""
+    name: Optional[str] = None # Name or title of the slide
+    content: str               # The primary instructional content of the slide
+    generated_outputs: List[GeneratedContentItem] = Field(default_factory=list) # Outputs from prompts run on this slide
+    
+    # Allow other arbitrary fields to be passed through and returned
+    model_config = {"extra": "allow"}
+
+class Section(BaseModel):
+    """Represents a section within a lesson, containing multiple slides."""
+    name: Optional[str] = None # Name of the section
+    slides: List[Slide]
+    
+    model_config = {"extra": "allow"}
+
+class Lesson(BaseModel):
+    """
+    Represents a complete lesson structure, containing sections and slides.
+    This is the main data unit for the /enhance endpoint's "lessons" array.
+    """
+    # Consider adding fields like lesson_id, title if they are part of your canonical lesson model
+    lesson_id: Optional[str] = None
+    title: Optional[str] = None
+    sections: List[Section]
+    
+    model_config = {"extra": "allow"}
+
+# --- REQUEST/RESPONSE MODELS FOR /enhance ---
+
+class EnhanceRequest(BaseModel):
+    prompts: Optional[List[PromptItem]] = None # Prompts are now optional
+    lessons: List[Lesson] # Changed from lesson_data: List[LessonDataEnhance]
+
+class EnhanceResponse(BaseModel):
+    lessons: List[Lesson] # Echoes the input structure with generated_outputs populated
+
+# --- Existing models for /analyze, /split, /extract (ensure they don't conflict) ---
+# Your existing models like AnalyzeRequestItem, BatchSplitRequest, etc. remain here.
+# Ensure LessonDataEnhance is fully removed or renamed if it was only for /enhance.
+
+class SectionInfo(BaseModel): # For /analyze
     sectionName: str
     pageRange: str
 
-# For /analyze batch input
-class AnalyzeRequestItem(BaseModel):
+class AnalyzeRequestItem(BaseModel): # For /analyze
     file_id: str
 
-# For /analyze batch response item - success case
-class AnalyzeResponseItemSuccess(BaseModel):
-    originalDriveFileId: str
-    originalDriveFileName: str
-    originalDriveParentFolderId: str
-    sections: List[Dict[str, str]] # List of section dictionaries
-
-# For /analyze batch response item - failure case
-class AnalyzeResponseItemError(BaseModel):
+class AnalyzeResponseItemError(BaseModel): # For /analyze
     originalDriveFileId: str
     error: str
     detail: Optional[str] = None
 
-# For /analyze batch response (each item is either success or error)
-class BatchAnalyzeItemResult(BaseModel):
-     success: bool
-     result: Optional[AnalyzeResponseItemSuccess] = None
-     error_info: Optional[AnalyzeResponseItemError] = None
-
-# Shared model for info about uploaded split files
-class UploadedFileInfo(BaseModel):
-    sectionName: str
-    uploadedDriveFileId: Optional[str]
-    uploadedDriveFileName: str
-
-# For /split batch input
-class BatchSplitRequest(BaseModel):
-    files_to_split: List[AnalyzeResponseItemSuccess] # List of successful analysis results
-
-# For /split batch response item - success case
-class SplitResponseItemSuccess(BaseModel):
+class AnalyzeResponseItemSuccess(BaseModel): # For /analyze
     originalDriveFileId: str
-    originalDriveFileName: str
-    originalDriveParentFolderId: str
+    originalDriveFileName: Optional[str] = None
+    originalDriveParentFolderId: Optional[str] = None
+    sections: List[SectionInfo] # Or List[Dict[str,str]] if not strictly typed
+
+class BatchAnalyzeItemResult(BaseModel): # For /analyze
+    success: bool
+    result: Optional[AnalyzeResponseItemSuccess] = None
+    error_info: Optional[AnalyzeResponseItemError] = None
+
+class UploadedFileInfo(BaseModel): # For /split
+    sectionName: str
+    uploadedDriveFileId: Optional[str] = None
+    uploadedDriveFileName: Optional[str] = None
+
+class SplitResponseItemSuccess(BaseModel): # For /split
+    originalDriveFileId: str
+    originalDriveFileName: Optional[str] = None
+    originalDriveParentFolderId: Optional[str] = None
     uploadedSections: List[UploadedFileInfo]
 
-# For /split batch response item - failure case
-class SplitResponseItemError(BaseModel):
+class SplitResponseItemError(BaseModel): # For /split
     originalDriveFileId: str
     error: str
     detail: Optional[str] = None
 
-# For /split batch response (each item is either success or error)
-class BatchSplitItemResult(BaseModel):
-     success: bool
-     result: Optional[SplitResponseItemSuccess] = None
-     error_info: Optional[SplitResponseItemError] = None
+class BatchSplitItemResult(BaseModel): # For /split
+    success: bool
+    result: Optional[SplitResponseItemSuccess] = None
+    error_info: Optional[SplitResponseItemError] = None
 
-# --- NEW Models for /extract endpoint ---
+class BatchSplitRequest(BaseModel): # For /split
+    files_to_split: List[AnalyzeResponseItemSuccess]
 
-# Model for a single item in the /extract batch request
-class ExtractRequestItem(BaseModel):
-    prompt_doc_id: str # Google Drive File ID of the Doc containing the prompt
-    target_file_id: str # Google Drive File ID of the PDF to extract data FROM
 
-# Model for the structure of extracted data per section
-# e.g., {"page": 9, "title": "...", "paragraph": "..."}
-class ExtractedSectionDataItem(BaseModel):
+class ExtractedSectionDataItem(BaseModel): # For /extract
     page: int
-    title: Optional[str] = None # Titles might not always be present for every paragraph
+    title: Optional[str] = None
     paragraph: str
 
-# Model for the structure of extracted data for a whole file
-# e.g., {"Section Name 1": [ExtractedSectionDataItem, ...], "Section Name 2": [...]}
-# This is a dictionary where keys are section names (str) and values are lists of data items
-ExtractedDataDict = Dict[str, List[ExtractedSectionDataItem]]
+ExtractedDataDict = Dict[str, List[ExtractedSectionDataItem]] # Type alias for /extract
 
+class ExtractRequestItem(BaseModel): # For /extract
+    prompt_doc_id: str
+    target_file_id: str
 
-# For /extract batch response item - success case
-class ExtractResponseItemSuccess(BaseModel):
-    promptDriveDocId: str # Echo back the prompt doc ID
-    targetDriveFileId: str # Echo back the target file ID
-    targetDriveFileName: str # Include target file name
-    targetDriveParentFolderId: Optional[str] # Include target parent folder ID
-    extractedData: ExtractedDataDict # The structured data extracted by Gemini
+class ExtractResponseItemSuccess(BaseModel): # For /extract
+    promptDriveDocId: str
+    targetDriveFileId: str
+    targetDriveFileName: Optional[str] = None
+    targetDriveParentFolderId: Optional[str] = None
+    extractedData: ExtractedDataDict
 
-
-# For /extract batch response item - failure case
-class ExtractResponseItemError(BaseModel):
+class ExtractResponseItemError(BaseModel): # For /extract
     promptDriveDocId: str
     targetDriveFileId: str
     error: str
     detail: Optional[str] = None
 
+class BatchExtractItemResult(BaseModel): # For /extract
+    success: bool
+    result: Optional[ExtractResponseItemSuccess] = None
+    error_info: Optional[ExtractResponseItemError] = None
 
-# For /extract batch response (each item is either success or error)
-class BatchExtractItemResult(BaseModel):
-     success: bool
-     result: Optional[ExtractResponseItemSuccess] = None
-     error_info: Optional[ExtractResponseItemError] = None
-
-class PromptItem(BaseModel):
-    prompt_name: str
-    prompt_template: str
-    lesson_properties_to_append: List[str] = Field(default_factory=list)
-
-class GeneratedContentItem(BaseModel):
-    """Represents a piece of content generated for a lesson based on a specific prompt."""
-    prompt_name: str
-    output: Optional[str] = None  # Renamed from generated_text
-    status: Optional[str] = None
-
-class LessonDataEnhance(BaseModel):
-    content: str
-    generated_outputs: List[GeneratedContentItem] = Field(default_factory=list)
-    model_config = {"extra": "allow"}
-
-class EnhanceRequest(BaseModel):
-    prompts: List[PromptItem]
-    lesson_data: List[LessonDataEnhance]
-
-class EnhanceResponse(BaseModel):
-    lesson_data: List[LessonDataEnhance]

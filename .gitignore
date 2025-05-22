@@ -137,3 +137,7 @@ Thumbs.db
 # Other
 # playground.json # Add if this is a temporary/output file
 # debug_prompt.txt # Add if this is a temporary/output file
+
+service_acct.json
+sample.json
+temp.py

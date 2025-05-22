@@ -5,4 +5,5 @@ google-api-python-client
 google-generativeai
 PyMuPDF
 pydantic # For data validation in FastAPI
+pydantic-settings
 python-dotenv # For local development configuration (optional)
