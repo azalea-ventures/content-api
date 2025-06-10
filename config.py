@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     # google_service_account_json: Optional[str] = None # Old one
     google_service_account_json_base64: Optional[str] = None # New Base64 field
     gemini_api_key: Optional[str] = None
-    gemini_model_id: str = "gemini-1.5-flash-latest"
+    gemini_model_id: str = "gemini-2.0-flash-latest"
     max_api_retries: int = 3
     max_data_dependency_retries: int = 5
     retry_cooldown_seconds: int = 60

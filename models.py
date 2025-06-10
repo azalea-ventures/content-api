@@ -1,9 +1,9 @@
-# In models.py
+# models.py
 
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Union
 
-# --- SHARED MODELS (Used by /enhance and potentially others) ---
+# --- SHARED MODELS (Used by /enhance/units and /enhance/lessons) ---
 
 class PromptItem(BaseModel):
     """Defines a single prompt to be processed."""
@@ -18,7 +18,7 @@ class GeneratedContentItem(BaseModel):
     output: Optional[str] = None # The generated text/JSON string
     status: Optional[str] = None # e.g., "SUCCESS", "RATE_LIMIT", "DATA_DEPENDENCY_PENDING"
 
-# --- NEW HIERARCHICAL MODELS FOR LESSON STRUCTURE (for /enhance) ---
+# --- HIERARCHICAL MODELS FOR /enhance/units (formerly /enhance) ---
 
 class Slide(BaseModel):
     """Represents a single slide within a lesson section."""
@@ -26,7 +26,6 @@ class Slide(BaseModel):
     content: str               # The primary instructional content of the slide
     generated_outputs: List[GeneratedContentItem] = Field(default_factory=list) # Outputs from prompts run on this slide
     
-    # Allow other arbitrary fields to be passed through and returned
     model_config = {"extra": "allow"}
 
 class Section(BaseModel):
@@ -36,105 +35,138 @@ class Section(BaseModel):
     
     model_config = {"extra": "allow"}
 
-class Lesson(BaseModel):
+class LessonUnit(BaseModel): # Renamed from Lesson to LessonUnit for clarity
     """
-    Represents a complete lesson structure, containing sections and slides.
-    This is the main data unit for the /enhance endpoint's "lessons" array.
+    Represents a complete lesson unit structure, containing sections and slides.
+    This is the main data unit for the /enhance/units endpoint.
     """
-    # Consider adding fields like lesson_id, title if they are part of your canonical lesson model
     lesson_id: Optional[str] = None
     title: Optional[str] = None
     sections: List[Section]
     
     model_config = {"extra": "allow"}
 
-# --- REQUEST/RESPONSE MODELS FOR /enhance ---
+class EnhanceUnitsRequest(BaseModel): # Renamed from EnhanceRequest
+    prompts: Optional[List[PromptItem]] = None
+    lessons: List[LessonUnit] # Uses LessonUnit
 
-class EnhanceRequest(BaseModel):
-    prompts: Optional[List[PromptItem]] = None # Prompts are now optional
-    lessons: List[Lesson] # Changed from lesson_data: List[LessonDataEnhance]
+class EnhanceUnitsResponse(BaseModel): # Renamed from EnhanceResponse
+    lessons: List[LessonUnit] # Uses LessonUnit
 
-class EnhanceResponse(BaseModel):
-    lessons: List[Lesson] # Echoes the input structure with generated_outputs populated
 
-# --- Existing models for /analyze, /split, /extract (ensure they don't conflict) ---
-# Your existing models like AnalyzeRequestItem, BatchSplitRequest, etc. remain here.
-# Ensure LessonDataEnhance is fully removed or renamed if it was only for /enhance.
+# --- "FLAT" LESSON MODEL for /enhance/lessons ---
 
-class SectionInfo(BaseModel): # For /analyze
+class LessonSimple(BaseModel):
+    """Represents a simpler, flat lesson structure for /enhance/lessons."""
+    # Common fields that might be present in a lesson object
+    timestamp: Optional[str] = None
+    file_id: Optional[str] = None
+    url: Optional[str] = None
+    folder_path: Optional[str] = None
+    file_name: Optional[str] = None
+    lesson_date: Optional[str] = None # Consider date type if strict validation needed
+    iclo_slide: Optional[float] = None
+    strategy_application_slide: Optional[float] = None
+    learning_objective: Optional[str] = None
+    standards: Optional[str] = None
+    
+    # Example extra fields from user's sample
+    clc_element: Optional[str] = None 
+    strategy_application_element: Optional[str] = None
+    
+    content: str # The primary content for this lesson item
+    generated_outputs: List[GeneratedContentItem] = Field(default_factory=list)
+
+    model_config = {"extra": "allow"} # Allows any other fields from input
+
+# --- REQUEST/RESPONSE MODELS FOR /enhance/lessons ---
+
+class EnhanceLessonsRequest(BaseModel):
+    prompts: Optional[List[PromptItem]] = None
+    lessons: List[LessonSimple]
+
+class EnhanceLessonsResponse(BaseModel):
+    lessons: List[LessonSimple]
+
+
+# --- MODELS FOR /analyze ---
+
+class SectionInfo(BaseModel):
     sectionName: str
     pageRange: str
 
-class AnalyzeRequestItem(BaseModel): # For /analyze
+class AnalyzeRequestItem(BaseModel):
     file_id: str
 
-class AnalyzeResponseItemError(BaseModel): # For /analyze
+class AnalyzeResponseItemError(BaseModel):
     originalDriveFileId: str
     error: str
     detail: Optional[str] = None
 
-class AnalyzeResponseItemSuccess(BaseModel): # For /analyze
+class AnalyzeResponseItemSuccess(BaseModel):
     originalDriveFileId: str
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
-    sections: List[SectionInfo] # Or List[Dict[str,str]] if not strictly typed
+    sections: List[SectionInfo] # Or List[Dict[str,str]]
 
-class BatchAnalyzeItemResult(BaseModel): # For /analyze
+class BatchAnalyzeItemResult(BaseModel):
     success: bool
     result: Optional[AnalyzeResponseItemSuccess] = None
     error_info: Optional[AnalyzeResponseItemError] = None
 
-class UploadedFileInfo(BaseModel): # For /split
+# --- MODELS FOR /split ---
+
+class UploadedFileInfo(BaseModel):
     sectionName: str
     uploadedDriveFileId: Optional[str] = None
     uploadedDriveFileName: Optional[str] = None
 
-class SplitResponseItemSuccess(BaseModel): # For /split
+class SplitResponseItemSuccess(BaseModel):
     originalDriveFileId: str
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
     uploadedSections: List[UploadedFileInfo]
 
-class SplitResponseItemError(BaseModel): # For /split
+class SplitResponseItemError(BaseModel):
     originalDriveFileId: str
     error: str
     detail: Optional[str] = None
 
-class BatchSplitItemResult(BaseModel): # For /split
+class BatchSplitItemResult(BaseModel):
     success: bool
     result: Optional[SplitResponseItemSuccess] = None
     error_info: Optional[SplitResponseItemError] = None
 
-class BatchSplitRequest(BaseModel): # For /split
-    files_to_split: List[AnalyzeResponseItemSuccess]
+class BatchSplitRequest(BaseModel): # Input for /split endpoint
+    files_to_split: List[AnalyzeResponseItemSuccess] # Takes output from /analyze
 
+# --- MODELS FOR /extract ---
 
-class ExtractedSectionDataItem(BaseModel): # For /extract
+class ExtractedSectionDataItem(BaseModel):
     page: int
     title: Optional[str] = None
     paragraph: str
 
-ExtractedDataDict = Dict[str, List[ExtractedSectionDataItem]] # Type alias for /extract
+ExtractedDataDict = Dict[str, List[ExtractedSectionDataItem]] # Type alias
 
-class ExtractRequestItem(BaseModel): # For /extract
+class ExtractRequestItem(BaseModel):
     prompt_doc_id: str
     target_file_id: str
 
-class ExtractResponseItemSuccess(BaseModel): # For /extract
+class ExtractResponseItemSuccess(BaseModel):
     promptDriveDocId: str
     targetDriveFileId: str
     targetDriveFileName: Optional[str] = None
     targetDriveParentFolderId: Optional[str] = None
     extractedData: ExtractedDataDict
 
-class ExtractResponseItemError(BaseModel): # For /extract
+class ExtractResponseItemError(BaseModel):
     promptDriveDocId: str
     targetDriveFileId: str
     error: str
     detail: Optional[str] = None
 
-class BatchExtractItemResult(BaseModel): # For /extract
+class BatchExtractItemResult(BaseModel):
     success: bool
     result: Optional[ExtractResponseItemSuccess] = None
     error_info: Optional[ExtractResponseItemError] = None
-
