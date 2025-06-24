@@ -24,15 +24,19 @@ class SupabaseStorageService(StorageService):
     def download_file_content(self, file_id: str) -> Optional[io.BytesIO]:
         try:
             file_info = self.get_file_info(file_id)
-            if not file_info or "url" not in file_info:
-                print(f"SupabaseStorageService: File info or URL not found for {file_id}")
+            bucket_name = settings.supabase_bucket_name
+            if not file_info or "name" not in file_info or not bucket_name:
+                print(f"SupabaseStorageService: File info, name, or bucket not found for {file_id}")
                 return None
-            url = file_info["url"]
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-            file_stream = io.BytesIO(response.content)
-            file_stream.seek(0)
-            return file_stream
+
+            response = self.supabase.storage.from_(bucket_name).download(file_info["url"])
+            file_stream = io.BytesIO(response)
+
+            if file_stream:
+                return file_stream
+            else:
+                print(f"SupabaseStorageService: Failed to download file {file_info.get('url')} from bucket {bucket_name}. Status: {getattr(response, 'status_code', 'unknown')}")
+                return None
         except Exception as e:
             print(f"SupabaseStorageService: Error downloading file content for {file_id}: {e}")
             return None

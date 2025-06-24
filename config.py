@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     retry_cooldown_seconds: int = 60
     supabase_url: Optional[str] = None
     supabase_key: Optional[str] = None
+    supabase_bucket_name: Optional[str] = None
     storage_backend: str = "supabase"  # Options: 'google_drive', 'supabase'
 
 settings = Settings()
