@@ -102,6 +102,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+venv-py311/
 
 # Spyder project settings
 .spyderproject

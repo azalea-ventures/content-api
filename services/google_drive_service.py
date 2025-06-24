@@ -2,6 +2,7 @@ import io
 import json
 import os
 from typing import Optional, Dict, Any, List
+from abc import ABC, abstractmethod
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -15,7 +16,24 @@ SCOPES = [
     'https://www.googleapis.com/auth/cloud-platform' # General scope for Generative Language API
 ]
 
-class GoogleDriveService:
+class StorageService(ABC):
+    @abstractmethod
+    def get_file_info(self, file_id: str) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    def download_file_content(self, file_id: str) -> Optional[io.BytesIO]:
+        pass
+
+    @abstractmethod
+    def export_google_doc_as_pdf(self, file_id: str) -> Optional[io.BytesIO]:
+        pass
+
+    @abstractmethod
+    def upload_file_to_folder(self, file_name: str, mime_type: str, file_stream: io.BytesIO, folder_id: str) -> Optional[str]:
+        pass
+
+class GoogleDriveService(StorageService):
     # Change __init__ to accept the Credentials object
     def __init__(self, credentials: Credentials):
         """

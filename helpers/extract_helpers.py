@@ -2,157 +2,321 @@
 
 import io
 import os
+import time
 import uuid
 import re
 import traceback
-from typing import Optional, List, Dict, Any
+import asyncio
+from collections import deque # For type hint
+from typing import Optional, List, Dict, Any, Tuple
 
-# Assuming 'types' is from google.generativeai for File object hinting
+# Pydantic imports
+from pydantic import BaseModel, Field # Ensure BaseModel and Field are imported
+
 from google.generativeai import types as genai_types_google
 
 from models import (
-    BatchExtractItemResult,
-    ExtractRequestItem, # Input type
-    ExtractResponseItemError,
-    ExtractResponseItemSuccess,
-    ExtractedDataDict # For type hinting output_json_format_example if strict
+    ExtractTask,
+    BatchExtractTaskResult,
+    ExtractTaskResponseItemError,
+    ExtractTaskResponseItemSuccess,
+    GeneratedContentItem,
+    PromptItem
 )
-# Import service class types for type hinting
 from services.google_drive_service import GoogleDriveService
-from services.pdf_text_extractor_service import PdfTextExtractorService
 from services.generative_analysis_service import GenerativeAnalysisService
 
-async def process_single_extract_request(
-    request_item: ExtractRequestItem,
-    drive_service: GoogleDriveService,
-    pdf_text_extractor_service: PdfTextExtractorService,
-    gemini_analysis_service: GenerativeAnalysisService,
-    output_json_format_example: ExtractedDataDict # Use the type alias
-) -> BatchExtractItemResult:
-    prompt_doc_id = request_item.prompt_doc_id
-    target_file_id = request_item.target_file_id
-    print(f"Processing extract request: Prompt Doc ID {prompt_doc_id}, Target File ID {target_file_id}")
+from helpers.enhance_helpers import PromptConstructionStatus # Import from enhance_helpers
+from config import settings
 
-    prompt_pdf_stream: Optional[io.BytesIO] = None
-    target_pdf_stream: Optional[io.BytesIO] = None
-    uploaded_target_file: Optional[genai_types_google.File] = None
-    prompt_text: Optional[str] = None
-    target_file_info: Optional[Dict[str, Any]] = None
+
+class ExtractionContext(BaseModel):
+    target_drive_file_id: str
+    target_drive_file_name: Optional[str] = None
+    generated_outputs: List[GeneratedContentItem] = Field(default_factory=list)
+    uploaded_target_gfile: Optional[genai_types_google.File] = None
+
+    # Pydantic model_config for this specific model
+    model_config = {
+        "extra": "allow",
+        "arbitrary_types_allowed": True # <-- ADD THIS LINE
+    }
+
+
+# ... rest of your extract_helpers.py file (functions remain the same) ...
+
+def _construct_extraction_prompt(
+    prompt_item: PromptItem,
+    extraction_ctx: ExtractionContext,
+    all_task_prompts: List[PromptItem]
+) -> Tuple[PromptConstructionStatus, Optional[str]]:
+    full_prompt_parts = [prompt_item.prompt_template.strip()]
+    all_dependencies_met = True
+    known_prompt_names_in_task = {p.prompt_name for p in all_task_prompts}
+
+    for prop_key_to_append in prompt_item.lesson_properties_to_append:
+        value_to_append: Optional[str] = None
+        property_display_name = prop_key_to_append.replace("_", " ").title()
+
+        if prop_key_to_append in known_prompt_names_in_task:
+            dependency_found = False
+            for gen_output in extraction_ctx.generated_outputs:
+                if gen_output.prompt_name == prop_key_to_append:
+                    dependency_found = True
+                    if gen_output.status == "SUCCESS" and gen_output.output is not None:
+                        value_to_append = gen_output.output
+                        property_display_name = f"Previously Extracted Data ('{prop_key_to_append}')"
+                    else:
+                        all_dependencies_met = False 
+                    break
+            if not dependency_found and all_dependencies_met: 
+                all_dependencies_met = False
+        elif extraction_ctx.model_extra and prop_key_to_append in extraction_ctx.model_extra:
+            try:
+                value_to_append = str(extraction_ctx.model_extra[prop_key_to_append])
+            except Exception as e:
+                print(f"Warning (Extract): Could not convert extra context field '{prop_key_to_append}' to string for prompt '{prompt_item.prompt_name}': {e}")
+        else:
+            print(f"Warning (Extract): Property '{prop_key_to_append}' requested by prompt '{prompt_item.prompt_name}' is not a known prior prompt for this task nor an extra field. Not appending.")
+
+        if not all_dependencies_met:
+            print(f"Info (Extract): Dependency '{prop_key_to_append}' for prompt '{prompt_item.prompt_name}' on TargetID '{extraction_ctx.target_drive_file_id}' not met. Deferring.")
+            break
+
+        if value_to_append is not None:
+            full_prompt_parts.append(f"---\n{property_display_name}:\n{value_to_append.strip()}")
+            
+    if not all_dependencies_met:
+        return PromptConstructionStatus.MISSING_DEPENDENCY, None
+    
+    return PromptConstructionStatus.SUCCESS, "\n".join(full_prompt_parts)
+
+
+async def _execute_extraction_api_call(
+    gemini_service: GenerativeAnalysisService,
+    extraction_ctx: ExtractionContext,
+    prompt_item: PromptItem,
+    full_prompt_text_for_instructions: str,
+    api_attempt_count: int,
+    api_retry_queue: deque, 
+    task_id_for_queue: str
+) -> bool: 
+    prompt_name = prompt_item.prompt_name
+    target_id_log = extraction_ctx.target_drive_file_id
+    print(f"API Call (Extract): Task '{task_id_for_queue}', Target '{target_id_log}', Prompt '{prompt_name}', API Attempt {api_attempt_count + 1}.")
+
+    if not extraction_ctx.uploaded_target_gfile:
+        print(f"Error (Extract): Target Google AI File not found in context for Task '{task_id_for_queue}', Prompt '{prompt_name}'.")
+        output_item, _ = get_extraction_output_item(extraction_ctx, prompt_name) 
+        output_item.status = "ERROR_INTERNAL_NO_GFILE"
+        output_item.output = "Internal error: Target Google AI File was not available for multimodal prompt."
+        return False 
+
+    final_instructions = full_prompt_text_for_instructions
+    if prompt_item.output_json_format_example_str:
+        final_instructions += (
+            f"\n\n--- EXPECTED JSON OUTPUT FORMAT EXAMPLE ---\n"
+            f"{prompt_item.output_json_format_example_str.strip()}\n"
+            f"--- END EXPECTED JSON OUTPUT FORMAT EXAMPLE ---"
+        )
+    final_instructions += "\nEnsure the output is ONLY the requested information, formatted as specified (likely JSON)."
+
+    multimodal_prompt_parts = [
+        extraction_ctx.uploaded_target_gfile, 
+        final_instructions                    
+    ]
+    
+    status, api_output_data = await gemini_service.generate_text(multimodal_prompt_parts) 
+
+    output_item, _ = get_extraction_output_item(extraction_ctx, prompt_name) 
+    output_item.status = status 
+    output_item.output = api_output_data 
+
+    if status == "SUCCESS":
+        print(f"SUCCESS (Extract): Task '{task_id_for_queue}', Target '{target_id_log}', Prompt '{prompt_name}'.")
+        return False
+    elif status == "RATE_LIMIT" or status == "ERROR_API":
+        print(f"{status} (Extract): Task '{task_id_for_queue}', Target '{target_id_log}', Prompt '{prompt_name}'. Error: {str(api_output_data)[:100]}")
+        if api_attempt_count + 1 < settings.max_api_retries:
+            print(f"Re-queuing for API retry (Extract): Task '{task_id_for_queue}', Prompt '{prompt_name}' (API attempt {api_attempt_count + 2}).")
+            retry_task_details = {
+                "type": "extraction_api_retry", 
+                "task_id": task_id_for_queue,
+                "prompt_item": prompt_item,
+                "full_prompt_text_for_instructions": full_prompt_text_for_instructions, 
+                "api_attempt_count": api_attempt_count + 1
+            }
+            api_retry_queue.append(retry_task_details)
+            output_item.status = "PENDING_API_RETRY"
+        else:
+            err_msg = f"Max API retries ({settings.max_api_retries}) for extraction: Task '{task_id_for_queue}', Prompt '{prompt_name}'. Last: [{status}] {str(api_output_data)[:100]}"
+            print(err_msg)
+        return True 
+    else: 
+        err_msg = f"Permanent Error (Extract): Task '{task_id_for_queue}', Prompt '{prompt_name}': [{status}] {str(api_output_data)[:100]}"
+        print(err_msg)
+        return False
+
+
+def get_extraction_output_item(extraction_ctx: ExtractionContext, prompt_name: str) -> Tuple[GeneratedContentItem, bool]:
+    for item in extraction_ctx.generated_outputs:
+        if item.prompt_name == prompt_name:
+            return item, False
+    new_item = GeneratedContentItem(prompt_name=prompt_name)
+    extraction_ctx.generated_outputs.append(new_item)
+    return new_item, True
+
+async def process_single_extract_task( 
+    extract_task_item: ExtractTask,
+    drive_service: GoogleDriveService,
+    gemini_analysis_service: GenerativeAnalysisService
+) -> BatchExtractTaskResult: 
+    
+    task_id = extract_task_item.task_id
+    target_file_id = extract_task_item.target_drive_file_id
+    print(f"Processing Extract Task ID: {task_id}, Target File ID: {target_file_id}")
+
+    # Pass task_id to ExtractionContext if it's part of its model definition
+    extraction_ctx = ExtractionContext(target_drive_file_id=target_file_id) 
+    
+    pdf_stream: Optional[io.BytesIO] = None
 
     try:
         target_file_info = drive_service.get_file_info(target_file_id)
         if target_file_info is None:
-            return BatchExtractItemResult(
-                success=False,
-                error_info=ExtractResponseItemError(
-                    promptDriveDocId=prompt_doc_id,
-                    targetDriveFileId=target_file_id,
-                    error="Target Drive file not found or permission denied to get info."
-                )
-            )
-        target_file_name = target_file_info.get('name', target_file_id)
-        target_parent_folder_id = target_file_info.get('parents', [None])[0]
+            return BatchExtractTaskResult(success=False, error_info=ExtractTaskResponseItemError(task_id=task_id, target_drive_file_id=target_file_id, error="Target Drive file not found or permission denied."))
+        
+        extraction_ctx.target_drive_file_name = target_file_info.get('name', target_file_id)
 
-        prompt_pdf_stream = drive_service.export_google_doc_as_pdf(prompt_doc_id)
-        if prompt_pdf_stream is None:
-            return BatchExtractItemResult(
-                success=False,
-                error_info=ExtractResponseItemError(
-                    promptDriveDocId=prompt_doc_id,
-                    targetDriveFileId=target_file_id,
-                    error="Failed to download/export prompt Google Doc as PDF."
-                )
-            )
+        pdf_stream = drive_service.download_file_content(target_file_id)
+        if pdf_stream is None: 
+            if pdf_stream is None:
+                return BatchExtractTaskResult(success=False, error_info=ExtractTaskResponseItemError(task_id=task_id, target_drive_file_id=target_file_id, error="Failed to download target file content."))
 
-        prompt_text = pdf_text_extractor_service.extract_full_text_from_pdf(prompt_pdf_stream)
-        if not prompt_text:
-            return BatchExtractItemResult(
-                success=False,
-                error_info=ExtractResponseItemError(
-                    promptDriveDocId=prompt_doc_id,
-                    targetDriveFileId=target_file_id,
-                    error="Could not extract text from prompt document."
-                )
-            )
+        target_gfile_display_name = f"extract_target_{os.path.splitext(extraction_ctx.target_drive_file_name or 'unknown')[0]}_{task_id[:8]}.pdf"
+        extraction_ctx.uploaded_target_gfile = gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, target_gfile_display_name)
+        
+        if extraction_ctx.uploaded_target_gfile is None:
+            return BatchExtractTaskResult(success=False, error_info=ExtractTaskResponseItemError(task_id=task_id, target_drive_file_id=target_file_id, error="Failed to upload target document for AI extraction."))
 
-        target_pdf_stream = drive_service.download_file_content(target_file_id)
-        if target_pdf_stream is None:
-            # Consider adding fallback logic if target_file_id could be a Google Doc
-            # target_mime_type = target_file_info.get('mimeType')
-            # if target_mime_type == 'application/vnd.google-apps.document':
-            #     print(f"Attempting to export target Google Doc {target_file_id} as PDF for extraction.")
-            #     target_pdf_stream = drive_service.export_google_doc_as_pdf(target_file_id)
+        api_retry_queue_extract = deque()
+        data_dependency_deferred_queue_extract = deque()
+
+        for p_item in extract_task_item.prompts:
+            data_dependency_deferred_queue_extract.append(
+                {"type": "extraction_data_dependency", "task_id": task_id, "prompt_item": p_item, "dd_attempt_count": 0}
+            )
+        
+        last_rate_limit_time_extract = None
+        processing_cycles_extract = 0
+        max_cycles_extract = len(extract_task_item.prompts) * (settings.max_api_retries + settings.max_data_dependency_retries + 2)
+
+        while data_dependency_deferred_queue_extract or api_retry_queue_extract:
+            processing_cycles_extract += 1
+            if processing_cycles_extract > max_cycles_extract:
+                print(f"Warning (Extract Task {task_id}): Max processing cycles reached. Breaking.")
+                break
             
-            if target_pdf_stream is None: # If still None after potential fallback
-                return BatchExtractItemResult(
-                    success=False,
-                    error_info=ExtractResponseItemError(
-                        promptDriveDocId=prompt_doc_id,
-                        targetDriveFileId=target_file_id,
-                        error="Failed to download target PDF file content."
+            if api_retry_queue_extract:
+                if not (last_rate_limit_time_extract and (time.monotonic() - last_rate_limit_time_extract < settings.retry_cooldown_seconds)):
+                    api_task_details = api_retry_queue_extract.popleft()
+                    if api_task_details.get("type") == "extraction_api_retry": # Check type
+                        rate_limit_hit_on_retry = await _execute_extraction_api_call(
+                            gemini_analysis_service, extraction_ctx, 
+                            api_task_details["prompt_item"], 
+                            api_task_details["full_prompt_text_for_instructions"],
+                            api_task_details["api_attempt_count"],
+                            api_retry_queue_extract,
+                            task_id # Pass task_id directly as defined in this function
+                        )
+                        if rate_limit_hit_on_retry: last_rate_limit_time_extract = time.monotonic()
+                    else: 
+                        api_retry_queue_extract.appendleft(api_task_details)
+                    await asyncio.sleep(0.1)
+                    continue
+            
+            if data_dependency_deferred_queue_extract:
+                dd_task_details = data_dependency_deferred_queue_extract.popleft()
+                if dd_task_details.get("type") == "extraction_data_dependency": # Check type
+                    current_prompt_item = dd_task_details["prompt_item"]
+                    dd_attempts = dd_task_details["dd_attempt_count"]
+
+                    construction_status, instructions_text = _construct_extraction_prompt(
+                        current_prompt_item, extraction_ctx, extract_task_item.prompts
                     )
-                )
 
-        target_display_name_base = os.path.splitext(target_file_name)[0]
-        target_display_name_sanitized = re.sub(r'[^\w\s.-]', '', target_display_name_base).strip()
-        if not target_display_name_sanitized:
-            target_display_name_sanitized = target_file_id
-        target_display_name = f"{target_display_name_sanitized}_{uuid.uuid4().hex}.pdf"
+                    if construction_status == PromptConstructionStatus.SUCCESS:
+                        if instructions_text is None:
+                            get_extraction_output_item(extraction_ctx, current_prompt_item.prompt_name)[0].status = "ERROR_INTERNAL_CONSTRUCTION"
+                            continue
+                        
+                        if last_rate_limit_time_extract and (time.monotonic() - last_rate_limit_time_extract < settings.retry_cooldown_seconds):
+                            dd_task_details["dd_attempt_count"] = dd_attempts
+                            data_dependency_deferred_queue_extract.append(dd_task_details)
+                            await asyncio.sleep(0.1)
+                            continue
 
-        uploaded_target_file = gemini_analysis_service.upload_pdf_for_analysis(target_pdf_stream, target_display_name)
-        if uploaded_target_file is None:
-            return BatchExtractItemResult(
-                success=False,
-                error_info=ExtractResponseItemError(
-                    promptDriveDocId=prompt_doc_id,
-                    targetDriveFileId=target_file_id,
-                    error="Failed to upload target document for AI extraction."
-                )
+                        api_call_requeued = await _execute_extraction_api_call(
+                            gemini_analysis_service, extraction_ctx, current_prompt_item, instructions_text, 0,
+                            api_retry_queue_extract, task_id # Pass task_id directly
+                        )
+                        if api_call_requeued: last_rate_limit_time_extract = time.monotonic()
+
+                    elif construction_status == PromptConstructionStatus.MISSING_DEPENDENCY:
+                        output_item_status_update, _ = get_extraction_output_item(extraction_ctx, current_prompt_item.prompt_name)
+                        if dd_attempts + 1 < settings.max_data_dependency_retries:
+                            dd_task_details["dd_attempt_count"] = dd_attempts + 1
+                            data_dependency_deferred_queue_extract.append(dd_task_details)
+                            output_item_status_update.status = "DATA_DEPENDENCY_PENDING"
+                            output_item_status_update.output = f"Waiting for data (attempt {dd_attempts + 1})"
+                        else:
+                            output_item_status_update.status = "DATA_DEPENDENCY_FAILED"
+                            output_item_status_update.output = f"Max data dependency retries ({settings.max_data_dependency_retries}) reached."
+                else: 
+                    data_dependency_deferred_queue_extract.appendleft(dd_task_details)
+                await asyncio.sleep(0.05)
+                continue
+            
+            if not data_dependency_deferred_queue_extract and not api_retry_queue_extract and \
+               last_rate_limit_time_extract and (time.monotonic() - last_rate_limit_time_extract < settings.retry_cooldown_seconds):
+                await asyncio.sleep(0.2)
+
+
+        for dd_task_details in list(data_dependency_deferred_queue_extract): # Iterate over copy
+            if dd_task_details.get("type") == "extraction_data_dependency":
+                output_item_timeout, _ = get_extraction_output_item(extraction_ctx, dd_task_details["prompt_item"].prompt_name)
+                if output_item_timeout.status == "DATA_DEPENDENCY_PENDING" or not output_item_timeout.status:
+                    output_item_timeout.status = "DATA_DEPENDENCY_TIMEOUT"
+                    output_item_timeout.output = "Processing cycle limit reached while waiting for data dependency for extraction."
+
+
+        print(f"Finished processing prompts for Extract Task ID: {task_id}")
+        return BatchExtractTaskResult(
+            success=True, 
+            result=ExtractTaskResponseItemSuccess(
+                task_id=task_id, # Ensure task_id is passed back
+                target_drive_file_id=target_file_id,
+                target_drive_file_name=extraction_ctx.target_drive_file_name,
+                extraction_results=extraction_ctx.generated_outputs
             )
-
-        extracted_data_dict = gemini_analysis_service.extract_structured_data_multimodal(
-            uploaded_target_file,
-            prompt_text,
-            output_json_format_example # This is ExtractedDataDict
         )
-        if extracted_data_dict is None:
-            return BatchExtractItemResult(
-                success=False,
-                error_info=ExtractResponseItemError(
-                    promptDriveDocId=prompt_doc_id,
-                    targetDriveFileId=target_file_id,
-                    error="Failed to extract structured data with AI."
-                )
-            )
 
-        print(f"Successfully extracted data from target file ID {target_file_id} using prompt Doc ID {prompt_doc_id}.")
-        return BatchExtractItemResult(
-            success=True,
-            result=ExtractResponseItemSuccess(
-                promptDriveDocId=prompt_doc_id,
-                targetDriveFileId=target_file_id,
-                targetDriveFileName=target_file_name,
-                targetDriveParentFolderId=target_parent_folder_id,
-                extractedData=extracted_data_dict
-            )
-        )
     except Exception as ex:
-        print(f"Unhandled error processing extract for Prompt Doc {prompt_doc_id}, Target File {target_file_id}: {ex}")
+        print(f"Unhandled critical error processing Extract Task ID {task_id} for file {target_file_id}: {ex}")
         traceback.print_exc()
-        return BatchExtractItemResult(
+        return BatchExtractTaskResult(
             success=False,
-            error_info=ExtractResponseItemError(
-                promptDriveDocId=prompt_doc_id,
-                targetDriveFileId=target_file_id,
-                error="Internal server error during extraction.",
+            error_info=ExtractTaskResponseItemError(
+                task_id=task_id, # Ensure task_id is passed back
+                target_drive_file_id=target_file_id,
+                error="An internal server error occurred during extraction task.",
                 detail=str(ex)
             )
         )
     finally:
-        if prompt_pdf_stream: prompt_pdf_stream.close()
-        if target_pdf_stream: target_pdf_stream.close()
-        if uploaded_target_file and hasattr(uploaded_target_file, 'name') and gemini_analysis_service:
+        if pdf_stream: pdf_stream.close()
+        if extraction_ctx.uploaded_target_gfile and hasattr(extraction_ctx.uploaded_target_gfile, 'name') and gemini_analysis_service:
             try:
-                gemini_analysis_service.delete_uploaded_file(uploaded_target_file.name)
+                gemini_analysis_service.delete_uploaded_file(extraction_ctx.uploaded_target_gfile.name)
             except Exception as cleanup_ex:
-                print(f"Error during cleanup of uploaded file {uploaded_target_file.name}: {cleanup_ex}")
+                print(f"Error during cleanup of uploaded file {extraction_ctx.uploaded_target_gfile.name}: {cleanup_ex}")

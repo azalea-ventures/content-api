@@ -12,5 +12,8 @@ class Settings(BaseSettings):
     max_api_retries: int = 3
     max_data_dependency_retries: int = 5
     retry_cooldown_seconds: int = 60
+    supabase_url: Optional[str] = None
+    supabase_key: Optional[str] = None
+    storage_backend: str = "supabase"  # Options: 'google_drive', 'supabase'
 
 settings = Settings()

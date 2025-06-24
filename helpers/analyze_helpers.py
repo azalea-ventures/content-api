@@ -17,45 +17,43 @@ from models import (
     SectionInfo # If SectionInfo is directly used as a type hint within, otherwise not needed here
 )
 # Import service class types for type hinting
-from services.google_drive_service import GoogleDriveService
+from services.google_drive_service import StorageService
 from services.generative_analysis_service import GenerativeAnalysisService
 
 
 async def process_single_analyze_request(
     file_id: str,
-    drive_service: GoogleDriveService,
+    prompt_text: str,
+    storage_service: StorageService,
     gemini_analysis_service: GenerativeAnalysisService
 ) -> BatchAnalyzeItemResult:
     print(f"Processing analyze request for file ID: {file_id}")
     pdf_stream: Optional[io.BytesIO] = None
     uploaded_file: Optional[genai_types_google.File] = None # Use alias for clarity
     try:
-        original_file_info = drive_service.get_file_info(file_id)
+        original_file_info = storage_service.get_file_info(file_id)
         if original_file_info is None:
             return BatchAnalyzeItemResult(
                 success=False,
                 error_info=AnalyzeResponseItemError(
                     originalDriveFileId=file_id,
-                    error="Original Drive file not found or permission denied to get info."
+                    error="Original file not found or permission denied to get info."
                 )
             )
         original_file_name = original_file_info.get('name', file_id)
-        original_parent_folder_id = original_file_info.get('parents', [None])[0]
+        # For GoogleDriveService, 'parents' is a list; for Supabase, use 'user_id' as parent/folder equivalent
+        original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
 
-        pdf_stream = drive_service.download_file_content(file_id)
+        pdf_stream = storage_service.download_file_content(file_id)
         if pdf_stream is None:
             # Attempt export if direct download fails (e.g. Google Doc)
-            # This assumes your drive_service has an export_google_doc_as_pdf or similar
-            # For now, let's keep it simple; you can add this logic if it exists in your service
-            # mime_type = original_file_info.get('mimeType')
-            # if mime_type == 'application/vnd.google-apps.document':
-            #     pdf_stream = drive_service.export_google_doc_as_pdf(file_id)
+            pdf_stream = storage_service.export_google_doc_as_pdf(file_id)
             if pdf_stream is None:
                 return BatchAnalyzeItemResult(
                     success=False,
                     error_info=AnalyzeResponseItemError(
                         originalDriveFileId=file_id,
-                        error="Failed to download original Drive file content."
+                        error="Failed to download original file content."
                     )
                 )
 
@@ -75,9 +73,8 @@ async def process_single_analyze_request(
                 )
             )
 
-        # Assuming analyze_sections_multimodal returns List[Dict[str, str]] which pydantic can handle
-        # If SectionInfo model is used for stricter typing of this return, import it.
-        sections_info_dicts: Optional[List[Dict[str, str]]] = gemini_analysis_service.analyze_sections_multimodal(uploaded_file)
+        # Pass the user-supplied prompt_text to the analysis service
+        sections_info_dicts: Optional[List[Dict[str, str]]] = gemini_analysis_service.analyze_sections_multimodal(uploaded_file, prompt_text)
         if sections_info_dicts is None:
             print(f"AI analysis failed for file ID: {file_id}")
             return BatchAnalyzeItemResult(

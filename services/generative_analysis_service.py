@@ -189,93 +189,18 @@ class GenerativeAnalysisService:
         # finally block is in the caller endpoint
 
 
-    def analyze_sections_multimodal(self, uploaded_file: types.File) -> Optional[List[Dict[str, str]]]:
+    def analyze_sections_multimodal(self, uploaded_file: types.File, prompt_text: str) -> Optional[List[Dict[str, str]]]:
         """
-        Analyzes a PDF file reference for section headings and their page ranges.
-        Uses the API key configured via genai.configure().
+        Analyzes a PDF file reference for section headings and their page ranges using a user-supplied prompt.
         """
-        # *** CORRECTED ENUM REFERENCE ***
         if not uploaded_file or not uploaded_file.state == protos.File.State.ACTIVE:
             print("analyze_sections_multimodal received invalid uploaded_file object (not active).")
             print(f"Uploaded file state: {uploaded_file.state}")
             return None
 
-        # ... (observed_section_names list remains the same) ...
-        observed_section_names = [
-            'Vistazo al capítulo', 'Capítulo', 'Industria e inmigración',
-            'Pregunta principal', 'Comprensión duradera',
-            'Hacer conexiones', 'Video de la excursión', '¡En marcha!', 'Rapeemos', 'Interactividad de la Pregunta principal', 'Repaso del capítulo',
-            'Misión Aprendizaje basado en proyectos', 'Tomar un riesgo',
-            'Investigar', 'Interactividad de introducción a la lección', 'Lección [number]',
-            'Destrezas de lectura', 'Hacer una presentación efectiva', 'Destrezas de razonamiento crítico', 'Predecir consecuencias',
-            'Fuentes primarias', 'Henry Ford, sobre su línea de montaje', 'Civismo', 'George Shima',
-            'Sintetizar', 'Revisar la lección', 'Interactividad de Repaso de la lección', 'Evaluación del capítulo', 'Examen del capítulo',
-            'Demostrar', 'Prueba de la lección', 'Juegos de vocabulario del capítulo',
-            'Misión Hallazgos', 'Tomar un riesgo', 'TikaTok',
-            'Recursos de lectura para este capítulo', 'Libros por nivel', 'Libros del contenido', 'Usar los Tapetes de actividades de los estudiantes', 'Más allá del salón de clase',
-            'Metas de aprendizaje',
-            'Presentar el vocabulario', 'Presentar la Destreza de lectura', 'Presentar la Pregunta principal',
-            '¡En marcha!', # Appears multiple times
-            'Leer la lección',
-            'Sobre palabras',
-            'Conexión con el Plan de estudios',
-            'Enseñanza diferenciada',
-            'Los empresarios toman riesgos',
-            'La industria y los recursos',
-            'Los inventos y los negocios',
-            'Las nuevas formas de comunicación',
-            'La brillante idea de Edison',
-            'Las nuevas formas de viajar',
-            'Los aviones y el vuelo',
-            'El impacto de los inventos',
-            'Lograr la entrada al país',
-            'Un comienzo difícil',
-            'Los nuevos inmigrantes',
-            'Razones para la inmigración',
-            'Convertirse en estadounidense',
-            'La reacción contra los inmigrantes',
-            'Bienvenidos a una tierra nueva',
-            'Evaluación', # For the overall evaluation section
-            'Repaso visual', # For the overall review section
-            'Misión Conexión', # Appears multiple times
-            'Misión Arranque',
-            'Misión Hallazgos Escribe tu plan',
-            'Aplicar la destreza',
-            'Evaluación del desempeño',
-            'Taller de escritura',
-            'Actividad de escritura',
-            'Ideas erróneas más comunes',
-            'Consejos de escritura'
-        ]
-
-        prompt_text = (
-            "Analyze the provided multi-page PDF document.\n"
-            "Identify all distinct section headings present in the document. "
-            "Look for phrases that match or are similar to the following list of potential section names:\n"
-            f"{'- '.join(observed_section_names)}\n\n"
-            "For 'Lección [number]', identify any clear heading starting with 'Lección' followed by one or more digits. "
-            "For other names, match the exact phrase if it appears as a prominent heading.\n\n"
-            "For each *found* section heading, determine its start page and end page based on its location within the PDF document.\n"
-            "The start page is the first page number (1-indexed) where the section heading appears.\n"
-            "The end page is the last page number (1-indexed) where content belonging to that specific section appears, "
-            "just before the heading of the *next* identified section or the end of the document.\n"
-            "If a section starts and ends on the same page, the range is just that single page number (e.g., '5'). "
-            "If a section spans multiple pages, the range is 'StartPage-EndPage' (e.g., '1-3').\n"
-            "Only list the sections that are actually found in the document as headings.\n\n"
-            "Provide the output as a JSON array of objects. Each object must have exactly two keys: 'sectionName' and 'pageRange'. "
-            "Ensure the 'sectionName' is the *exact text* of the identified section heading from the document (e.g., 'Lección 1'). "
-            "The 'pageRange' should be a string formatted as 'StartPage-EndPage' or 'PageNumber' using 1-indexed page numbers.\n\n"
-            "Only return the JSON array. Do not include any other text, markdown formatting (like ```json`), or conversational filler before or after the JSON block.\n"
-            "Ensure the JSON is valid and complete."
-            "\nExample format (Note: these ranges are illustrative and may not match your document):\n"
-            "[\n"
-            "  { \"sectionName\": \"Vistazo al capítulo\", \"pageRange\": \"1\" },\n"
-            "  { \"sectionName\": \"Hacer conexiones\", \"pageRange\": \"1-2\" },\n"
-            "  { \"sectionName\": \"Lección 1\", \"pageRange\": \"9-16\" },\n"
-            "  { \"sectionName\": \"Destrezas de lectura\", \"pageRange\": \"35-36\" },\n"
-            "  { \"sectionName\": \"Evaluación\", \"pageRange\": \"39-41\" }\n"
-            "]"
-        )
+        if not prompt_text:
+            print("analyze_sections_multimodal received empty prompt_text.")
+            return None
 
         prompt_parts = [uploaded_file, prompt_text]
 
