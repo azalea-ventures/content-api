@@ -13,7 +13,7 @@ class SupabaseStorageService(StorageService):
 
     def get_file_info(self, file_id: str) -> Optional[Dict[str, Any]]:
         try:
-            response = self.supabase.table("files").select("id, name, url, size, type, user_id, created_at, updated_at").eq("id", file_id).single().execute()
+            response = self.supabase.table("files").select("id, name, file_path, size, type, user_id, created_at, updated_at").eq("id", file_id).single().execute()
             if response.data:
                 return response.data
             return None
@@ -29,13 +29,13 @@ class SupabaseStorageService(StorageService):
                 print(f"SupabaseStorageService: File info, name, or bucket not found for {file_id}")
                 return None
 
-            response = self.supabase.storage.from_(bucket_name).download(file_info["url"])
+            response = self.supabase.storage.from_(bucket_name).download(file_info["file_path"])
             file_stream = io.BytesIO(response)
 
             if file_stream:
                 return file_stream
             else:
-                print(f"SupabaseStorageService: Failed to download file {file_info.get('url')} from bucket {bucket_name}. Status: {getattr(response, 'status_code', 'unknown')}")
+                print(f"SupabaseStorageService: Failed to download file {file_info.get('file_path')} from bucket {bucket_name}. Status: {getattr(response, 'status_code', 'unknown')}")
                 return None
         except Exception as e:
             print(f"SupabaseStorageService: Error downloading file content for {file_id}: {e}")
@@ -62,7 +62,7 @@ class SupabaseStorageService(StorageService):
             file_size = file_stream.getbuffer().nbytes
             insert_response = self.supabase.table("files").insert({
                 "name": file_name,
-                "url": public_url,
+                "file_path": public_url,
                 "size": file_size,
                 "type": mime_type,
                 "user_id": folder_id,  # Assuming folder_id is user_id for this context
