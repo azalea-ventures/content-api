@@ -131,16 +131,16 @@ async def extract_data_endpoint(tasks: List[ExtractTask]):
     print(f"Finished batch extract request. Processed {len(tasks)} tasks.")
     return batch_results
 
-@app.post("/analyze", response_model=List[BatchAnalyzeItemResult], status_code=status.HTTP_200_OK)
-async def analyze_documents_endpoint(requests: List[AnalyzeRequestItem]):
+@app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)
+async def analyze_documents_endpoint(request: AnalyzeRequestItem):
     if not storage_service or not gemini_analysis_service:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Required services for /analyze not initialized.")
-    if not requests: return []
-    print(f"Batch analyze request: {len(requests)} files.")
-    analysis_tasks = [process_single_analyze_request(req.file_id, req.prompt_text, storage_service, gemini_analysis_service) for req in requests]
-    batch_results = await asyncio.gather(*analysis_tasks)
-    print(f"Finished batch analyze. Processed {len(requests)} files.")
-    return batch_results
+    if not request:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
+    print(f"Analyze request: file_id={request.file_id}")
+    result = await process_single_analyze_request(request.file_id, request.prompt_text, storage_service, gemini_analysis_service)
+    print(f"Finished analyze for file_id={request.file_id}.")
+    return result
 
 @app.post("/split", response_model=List[BatchSplitItemResult], status_code=status.HTTP_200_OK)
 async def split_documents_endpoint(request: BatchSplitRequest):
