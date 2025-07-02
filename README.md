@@ -129,25 +129,31 @@ The API exposes the following endpoints:
 ### Split Documents
 
 *   **Endpoint:** `POST /split`
-*   **Description:** Processes a batch of requests to split PDF documents from Google Drive into multiple smaller PDF files based on specified criteria (e.g., page ranges, section titles). The split parts are saved back to Google Drive.
-*   **Request Body:** `BatchSplitRequest` object containing a list of `SplitRequestItem`. See [`models.py`](./models.py) for these structures.
+*   **Description:** Splits a PDF document from Google Drive into multiple smaller PDF files based on specified page ranges and section names. The split parts are saved back to Google Drive.
+*   **Request Body:** `SplitRequest` object. See [`models.py`](./models.py) for the `SplitRequest` structure.
     ```json
-    // Example BatchSplitRequest
+    // Example SplitRequest
     {
-        "files_to_split": [
+        "originalDriveFileId": "google_drive_pdf_file_id_to_split",
+        "originalDriveFileName": "optional_original_file_name",
+        "originalDriveParentFolderId": "google_drive_folder_id_for_output",
+        "sections": [
             {
-                "file_id": "google_drive_pdf_file_id_to_split",
-                "split_type": "ranges", // or "sections"
-                "split_instructions": [
-                    {"range_start": 1, "range_end": 2, "output_name_suffix": "Part1"},
-                    {"range_start": 3, "range_end": 5, "output_name_suffix": "Part2"}
-                ], // or section_titles for "sections" type
-                "output_folder_id": "optional_google_drive_folder_id_for_output"
+                "sectionName": "Introduction",
+                "pageRange": "1-3"
+            },
+            {
+                "sectionName": "Main Content",
+                "pageRange": "4-10"
+            },
+            {
+                "sectionName": "Conclusion",
+                "pageRange": "11-12"
             }
         ]
     }
     ```
-*   **Response (Success - 200 OK):** A list of `BatchSplitItemResult` objects. See [`models.py`](./models.py) for details.
+*   **Response (Success - 200 OK):** A `BatchSplitItemResult` object. See [`models.py`](./models.py) for details.
 *   **Dependencies:** `GoogleDriveService`, `PdfSplitterService`.
 
 ### Enhance Lessons

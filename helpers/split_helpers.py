@@ -11,21 +11,21 @@ from models import (
     SplitResponseItemError,
     SplitResponseItemSuccess,
     UploadedFileInfo,
-    AnalyzeResponseItemSuccess # Input type
+    SplitRequest # Input type
 )
 # Import service class types for type hinting
 from services.google_drive_service import GoogleDriveService
 from services.pdf_splitter_service import PdfSplitterService
 
 async def process_single_split_request(
-    analyze_response_item: AnalyzeResponseItemSuccess,
+    split_request: SplitRequest,
     drive_service: GoogleDriveService,
     pdf_splitter_service: PdfSplitterService
 ) -> BatchSplitItemResult:
-    original_drive_file_id = analyze_response_item.originalDriveFileId
-    original_drive_file_name = analyze_response_item.originalDriveFileName
-    original_drive_parent_folder_id = analyze_response_item.originalDriveParentFolderId
-    sections_to_split_dicts = analyze_response_item.sections # List[SectionInfo] or List[Dict]
+    original_drive_file_id = split_request.originalDriveFileId
+    original_drive_file_name = split_request.originalDriveFileName
+    original_drive_parent_folder_id = split_request.originalDriveParentFolderId
+    sections_to_split_dicts = split_request.sections # List[SectionInfo] or List[Dict]
 
     print(f"Processing split request for Drive file ID: {original_drive_file_id}")
 
@@ -64,13 +64,19 @@ async def process_single_split_request(
                     )
                 )
         
-        # Ensure sections_to_split_dicts matches what split_pdf_by_sections expects (List[Dict] or List[SectionInfo])
-        # If it's List[SectionInfo], you might need to convert to List[Dict] if the service expects dicts.
-        # Assuming it's already in the correct format (List[Dict] as per previous context of analyze_sections_multimodal)
+        # Convert SectionInfo objects to dictionaries for the PDF splitter service
+        sections_as_dicts = [
+            {
+                "sectionName": section.sectionName,
+                "pageRange": section.pageRange
+            }
+            for section in sections_to_split_dicts
+        ]
+        
         split_sections_output = await asyncio.to_thread(
             pdf_splitter_service.split_pdf_by_sections,
             original_pdf_stream,
-            sections_to_split_dicts # This should be List[Dict[str, str]]
+            sections_as_dicts # Now properly formatted as List[Dict[str, str]]
         )
 
         if not split_sections_output: # This is List[Dict[str, Any]] from PdfSplitterService

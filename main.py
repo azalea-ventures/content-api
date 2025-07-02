@@ -24,7 +24,7 @@ from models import (
     EnhanceUnitsRequest, EnhanceUnitsResponse,
     LessonSimple, EnhanceLessonsRequest, EnhanceLessonsResponse,
     SectionInfo, AnalyzeRequestItem, AnalyzeResponseItemSuccess, AnalyzeResponseItemError,
-    BatchAnalyzeItemResult, BatchSplitRequest, SplitResponseItemSuccess, SplitResponseItemError,
+    BatchAnalyzeItemResult, SplitRequest, SplitResponseItemSuccess, SplitResponseItemError,
     BatchSplitItemResult, UploadedFileInfo, 
     ExtractTask, BatchExtractTaskResult, # Revised Extract models
     ExtractedDataDict
@@ -93,6 +93,11 @@ try:
         print(f"Generative Analysis service initialized with model: {settings.gemini_model_id}.")
     else:
          print("GEMINI_API_KEY not found in settings.")
+    
+    # Initialize PDF splitter service
+    pdf_splitter_service = PdfSplitterService()
+    print("PDF Splitter service initialized.")
+    
     print("All available services initialized.")
 except Exception as e:
     print(f"Failed to initialize credentials or services during startup: {e}")
@@ -142,17 +147,16 @@ async def analyze_documents_endpoint(request: AnalyzeRequestItem):
     print(f"Finished analyze for file_id={request.file_id}.")
     return result
 
-@app.post("/split", response_model=List[BatchSplitItemResult], status_code=status.HTTP_200_OK)
-async def split_documents_endpoint(request: BatchSplitRequest):
+@app.post("/split", response_model=BatchSplitItemResult, status_code=status.HTTP_200_OK)
+async def split_documents_endpoint(request: SplitRequest):
     if not storage_service or not pdf_splitter_service:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Required services for /split not initialized.")
-    files_to_split = request.files_to_split
-    if not files_to_split: return []
-    print(f"Batch split request: {len(files_to_split)} files.")
-    split_tasks = [process_single_split_request(item, storage_service, pdf_splitter_service) for item in files_to_split]
-    batch_results = await asyncio.gather(*split_tasks)
-    print(f"Finished batch split. Processed {len(files_to_split)} files.")
-    return batch_results
+    if not request:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
+    print(f"Split request: file_id={request.originalDriveFileId}")
+    result = await process_single_split_request(request, storage_service, pdf_splitter_service)
+    print(f"Finished split for file_id={request.originalDriveFileId}.")
+    return result
 
 @app.post("/enhance/units", response_model=EnhanceUnitsResponse, status_code=status.HTTP_200_OK)
 async def enhance_units_endpoint(request: EnhanceUnitsRequest):

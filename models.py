@@ -157,5 +157,8 @@ class BatchSplitItemResult(BaseModel):
     result: Optional[SplitResponseItemSuccess] = None
     error_info: Optional[SplitResponseItemError] = None
 
-class BatchSplitRequest(BaseModel):
-    files_to_split: List[AnalyzeResponseItemSuccess]
+class SplitRequest(BaseModel):
+    originalDriveFileId: str
+    originalDriveFileName: Optional[str] = None
+    originalDriveParentFolderId: Optional[str] = None
+    sections: List[SectionInfo]
