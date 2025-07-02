@@ -194,7 +194,7 @@ async def process_single_extract_task(
                 return BatchExtractTaskResult(success=False, error_info=ExtractTaskResponseItemError(task_id=task_id, target_drive_file_id=target_file_id, error="Failed to download target file content."))
 
         target_gfile_display_name = f"extract_target_{os.path.splitext(extraction_ctx.target_drive_file_name or 'unknown')[0]}_{task_id[:8]}.pdf"
-        extraction_ctx.uploaded_target_gfile = gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, target_gfile_display_name)
+        extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, target_gfile_display_name)
         
         if extraction_ctx.uploaded_target_gfile is None:
             return BatchExtractTaskResult(success=False, error_info=ExtractTaskResponseItemError(task_id=task_id, target_drive_file_id=target_file_id, error="Failed to upload target document for AI extraction."))

@@ -4,6 +4,7 @@ import re
 import os
 import time
 import traceback
+import asyncio
 from typing import List, Dict, Any, Optional, Union, Tuple
 
 import google.generativeai as genai
@@ -70,7 +71,7 @@ class GenerativeAnalysisService:
                 prompt_text,
                 generation_config=generation_config # Pass the config here
             )
-
+            print(f'CACHED TOKENS: {response.usage_metadata.cached_content_token_count}')
             if response and response.candidates:
                 candidate = response.candidates[0]
                 finish_reason_obj = getattr(candidate, 'finish_reason', None)
@@ -129,7 +130,7 @@ class GenerativeAnalysisService:
             traceback.print_exc()
             return "ERROR_API", f"Unexpected error during API call: {str(e)}"
 
-    def upload_pdf_for_analysis(self, pdf_stream: io.BytesIO, display_name: str) -> Optional[types.File]:
+    async def upload_pdf_for_analysis(self, pdf_stream: io.BytesIO, display_name: str) -> Optional[types.File]:
         """
         Uploads a PDF stream to Google AI's temporary storage for analysis.
         Uses the API key configured via genai.configure().
@@ -161,7 +162,7 @@ class GenerativeAnalysisService:
             poll_count = 0
             # *** CORRECTED ENUM REFERENCE ***
             while uploaded_file.state == protos.File.State.PROCESSING and poll_count < max_polls:
-                time.sleep(5)
+                await asyncio.sleep(5)
                 uploaded_file = genai.get_file(file_name=uploaded_file.name)
                 print(f"File state: {uploaded_file.state}")
                 poll_count += 1
@@ -186,10 +187,10 @@ class GenerativeAnalysisService:
         except Exception as e:
             print(f"Error during PDF upload to Google AI: {e}")
             return None
-        # finally block is in the caller endpoint
+        # finally block is in the caller
 
 
-    def analyze_sections_multimodal(self, uploaded_file: types.File, prompt_text: str) -> Optional[List[Dict[str, str]]]:
+    async def analyze_sections_multimodal(self, uploaded_file: types.File, prompt_text: str) -> Optional[List[Dict[str, str]]]:
         """
         Analyzes a PDF file reference for section headings and their page ranges using a user-supplied prompt.
         """
@@ -209,10 +210,11 @@ class GenerativeAnalysisService:
 
         try:
             print(f"Sending multimodal prompt to Gemini model '{self.model_id}'...")
-            response = self.model.generate_content(
+            response = await self.model.generate_content_async(
                 prompt_parts,
                 request_options={'timeout': 300}
             )
+            print(f'TOTAL CACHED TOKENS: {response.usage_metadata.cached_content_token_count}')
             print("Received response from Gemini.")
 
             try: gemini_output = response.text
@@ -272,7 +274,7 @@ class GenerativeAnalysisService:
         # Cleanup handled in the caller
 
     # --- NEW METHOD for /extract ---
-    def extract_structured_data_multimodal(
+    async def extract_structured_data_multimodal(
         self,
         uploaded_target_file: types.File, # The PDF to extract data FROM
         prompt_text: str, # The text from the prompt Doc
@@ -328,7 +330,7 @@ class GenerativeAnalysisService:
 
         try:
             print(f"Sending multimodal extraction prompt to Gemini model '{self.model_id}' for file {uploaded_target_file.uri}...")
-            response = self.model.generate_content(
+            response = await self.model.generate_content_async(
                 prompt_parts,
                 request_options={'timeout': 300} # May need a long timeout
             )

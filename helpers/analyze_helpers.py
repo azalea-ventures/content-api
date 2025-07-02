@@ -44,6 +44,17 @@ async def process_single_analyze_request(
         # For GoogleDriveService, 'parents' is a list; for Supabase, use 'user_id' as parent/folder equivalent
         original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
 
+        # Check file size before downloading to prevent memory issues
+        file_size = original_file_info.get('size', 0)
+        if file_size > 50 * 1024 * 1024:  # 50MB limit
+            return BatchAnalyzeItemResult(
+                success=False,
+                error_info=AnalyzeResponseItemError(
+                    originalDriveFileId=file_id,
+                    error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
+                )
+            )
+
         pdf_stream = storage_service.download_file_content(file_id)
         if pdf_stream is None:
             # Attempt export if direct download fails (e.g. Google Doc)
@@ -63,7 +74,7 @@ async def process_single_analyze_request(
             display_name_sanitized = file_id
         display_name = f"{display_name_sanitized}_{uuid.uuid4().hex}.pdf"
 
-        uploaded_file = gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, display_name)
+        uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, display_name)
         if uploaded_file is None:
             return BatchAnalyzeItemResult(
                 success=False,
@@ -74,7 +85,7 @@ async def process_single_analyze_request(
             )
 
         # Pass the user-supplied prompt_text to the analysis service
-        sections_info_dicts: Optional[List[Dict[str, str]]] = gemini_analysis_service.analyze_sections_multimodal(uploaded_file, prompt_text)
+        sections_info_dicts: Optional[List[Dict[str, str]]] = await gemini_analysis_service.analyze_sections_multimodal(uploaded_file, prompt_text)
         if sections_info_dicts is None:
             print(f"AI analysis failed for file ID: {file_id}")
             return BatchAnalyzeItemResult(
@@ -107,8 +118,13 @@ async def process_single_analyze_request(
             )
         )
     finally:
+        # Explicit memory cleanup
         if pdf_stream:
-            pdf_stream.close()
+            try:
+                pdf_stream.close()
+                del pdf_stream
+            except Exception as e:
+                print(f"Error closing PDF stream: {e}")
         if uploaded_file and hasattr(uploaded_file, 'name') and gemini_analysis_service:
             try:
                 gemini_analysis_service.delete_uploaded_file(uploaded_file.name)
