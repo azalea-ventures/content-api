@@ -24,9 +24,9 @@ class SupabaseStorageService(StorageService):
     def download_file_content(self, file_id: str) -> Optional[io.BytesIO]:
         try:
             file_info = self.get_file_info(file_id)
-            bucket_name = settings.supabase_bucket_name
-            if not file_info or "name" not in file_info or not bucket_name:
-                print(f"SupabaseStorageService: File info, name, or bucket not found for {file_id}")
+            bucket_name = settings.supabase_bucket_name or "pdfs"  # Use configured bucket name or default to "pdfs"
+            if not file_info or "name" not in file_info:
+                print(f"SupabaseStorageService: File info or name not found for {file_id}")
                 return None
 
             response = self.supabase.storage.from_(bucket_name).download(file_info["file_path"])
@@ -51,13 +51,14 @@ class SupabaseStorageService(StorageService):
             file_stream.seek(0)
             # Compose storage path (e.g., folder_id/file_name)
             storage_path = f"{folder_id}/{file_name}"
-            # Upload to Supabase Storage bucket (assume bucket name 'pdfs')
-            storage_response = self.supabase.storage().from_("pdfs").upload(storage_path, file_stream, file_options={"content-type": mime_type, "upsert": True})
+            bucket_name = settings.supabase_bucket_name or "pdfs"  # Use configured bucket name or default to "pdfs"
+            # Upload to Supabase Storage bucket
+            storage_response = self.supabase.storage.from_(bucket_name).upload(storage_path, file_stream, file_options={"content-type": mime_type, "upsert": True})
             if not storage_response:
                 print(f"SupabaseStorageService: Failed to upload file to storage for {file_name}")
                 return None
             # Get public URL
-            public_url = self.supabase.storage().from_("pdfs").get_public_url(storage_path)
+            public_url = self.supabase.storage.from_(bucket_name).get_public_url(storage_path)
             # Insert metadata into files table
             file_size = file_stream.getbuffer().nbytes
             insert_response = self.supabase.table("files").insert({

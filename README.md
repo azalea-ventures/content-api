@@ -112,6 +112,37 @@ The API exposes the following endpoints:
 *   **Response (Success - 200 OK):** A list of `BatchExtractItemResult` objects. See [`models.py`](./models.py) for details. Each item indicates success or failure for the corresponding request.
 *   **Dependencies:** `GoogleDriveService`, `PdfTextExtractorService`, `GenerativeAnalysisService`.
 
+### Combined Extract (NEW)
+
+*   **Endpoint:** `POST /extract/combined`
+*   **Description:** **NEW OPTIMIZED ENDPOINT** - Combines section analysis and data extraction in a single operation. Uploads the file once to Gemini and uses it for both identifying sections and extracting data from each section. This eliminates the need for separate `/analyze` and `/extract` calls, reducing API overhead and improving performance.
+*   **Request Body:** `CombinedExtractRequest` object. See [`models.py`](./models.py) for the structure.
+    ```json
+    // Example CombinedExtractRequest
+    {
+        "target_drive_file_id": "google_drive_pdf_file_id",
+        "analysis_prompt": "Identify the main sections of this document and their page ranges.",
+        "extraction_prompts": [
+            {
+                "prompt_name": "extract_key_points",
+                "prompt_template": "Extract the key learning points from this section.",
+                "output_json_format_example_str": "{\"key_points\": [\"point1\", \"point2\"]}"
+            }
+        ],
+        "output_json_format_example": {
+            "key_points": ["example point 1", "example point 2"]
+        }
+    }
+    ```
+*   **Response (Success - 200 OK):** `CombinedExtractResponse` object containing both section analysis results and extracted data for each section.
+*   **Benefits:**
+    - Single file upload to Gemini (reduces API calls)
+    - No temporary split files created
+    - Faster processing time
+    - Lower storage costs
+    - Simplified workflow
+*   **Dependencies:** `StorageService`, `GenerativeAnalysisService`.
+
 ### Analyze Documents
 
 *   **Endpoint:** `POST /analyze`

@@ -14,7 +14,7 @@ from models import (
     BatchAnalyzeItemResult,
     AnalyzeResponseItemError,
     AnalyzeResponseItemSuccess,
-    SectionInfo # If SectionInfo is directly used as a type hint within, otherwise not needed here
+    SectionWithPages # Updated to use the new model with page metadata
 )
 # Import service class types for type hinting
 from services.google_drive_service import StorageService
@@ -85,7 +85,7 @@ async def process_single_analyze_request(
             )
 
         # Pass the user-supplied prompt_text to the analysis service
-        sections_info_dicts: Optional[List[Dict[str, str]]] = await gemini_analysis_service.analyze_sections_multimodal(uploaded_file, prompt_text)
+        sections_info_dicts: Optional[List[Dict[str, Any]]] = await gemini_analysis_service.analyze_sections_multimodal(uploaded_file, prompt_text)
         if sections_info_dicts is None:
             print(f"AI analysis failed for file ID: {file_id}")
             return BatchAnalyzeItemResult(
@@ -97,13 +97,30 @@ async def process_single_analyze_request(
             )
 
         print(f"Successfully analyzed file ID: {file_id}. Returning results.")
+        
+        # Convert the dictionary data to SectionWithPages objects
+        sections_with_pages = []
+        for section_dict in sections_info_dicts:
+            pages = []
+            for page_dict in section_dict.get('pages', []):
+                pages.append({
+                    'pageNumber': page_dict['pageNumber'],
+                    'pageLabel': page_dict['pageLabel']
+                })
+            
+            sections_with_pages.append(SectionWithPages(
+                pageRange=section_dict['pageRange'],
+                sectionName=section_dict['sectionName'],
+                pages=pages
+            ))
+        
         return BatchAnalyzeItemResult(
             success=True,
             result=AnalyzeResponseItemSuccess(
                 originalDriveFileId=file_id,
                 originalDriveFileName=original_file_name,
                 originalDriveParentFolderId=original_parent_folder_id,
-                sections=sections_info_dicts # This should match List[SectionInfo] or List[Dict]
+                sections=sections_with_pages
             )
         )
     except Exception as ex:

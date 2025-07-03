@@ -27,7 +27,8 @@ from models import (
     BatchAnalyzeItemResult, SplitRequest, SplitResponseItemSuccess, SplitResponseItemError,
     BatchSplitItemResult, UploadedFileInfo, 
     ExtractTask, BatchExtractTaskResult, # Revised Extract models
-    ExtractedDataDict
+    ExtractedDataDict,
+    CombinedExtractRequest, CombinedExtractResponse
 )
 
 from services.google_drive_service import GoogleDriveService, StorageService
@@ -47,6 +48,7 @@ from helpers.enhance_helpers import (
     get_or_create_output_item
 )
 from helpers.extract_helpers import process_single_extract_task
+from helpers.combined_extract_helpers import process_combined_extract_request
 
 
 load_dotenv()
@@ -135,6 +137,28 @@ async def extract_data_endpoint(tasks: List[ExtractTask]):
         
     print(f"Finished batch extract request. Processed {len(tasks)} tasks.")
     return batch_results
+
+@app.post("/extract/combined", response_model=CombinedExtractResponse, status_code=status.HTTP_200_OK)
+async def combined_extract_endpoint(request: CombinedExtractRequest):
+    """
+    Combined endpoint that analyzes document sections and extracts data in one operation.
+    Eliminates the need for separate /analyze and /extract calls.
+    Uploads the file once to Gemini and uses it for both section analysis and data extraction.
+    """
+    if not storage_service or not gemini_analysis_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Required services (Storage, Generative Analysis) are not configured or failed to initialize."
+        )
+    
+    if not request:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
+    
+    print(f"Combined extract request for file: {request.target_drive_file_id}")
+    result = await process_combined_extract_request(request, storage_service, gemini_analysis_service)
+    print(f"Finished combined extract for file: {request.target_drive_file_id}")
+    
+    return result
 
 @app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)
 async def analyze_documents_endpoint(request: AnalyzeRequestItem):

@@ -190,9 +190,10 @@ class GenerativeAnalysisService:
         # finally block is in the caller
 
 
-    async def analyze_sections_multimodal(self, uploaded_file: types.File, prompt_text: str) -> Optional[List[Dict[str, str]]]:
+    async def analyze_sections_multimodal(self, uploaded_file: types.File, prompt_text: str) -> Optional[List[Dict[str, Any]]]:
         """
-        Analyzes a PDF file reference for section headings and their page ranges using a user-supplied prompt.
+        Analyzes a PDF file reference for section headings, their page ranges, and page metadata using a user-supplied prompt.
+        Returns a list of dictionaries with section information including page details.
         """
         if not uploaded_file or not uploaded_file.state == protos.File.State.ACTIVE:
             print("analyze_sections_multimodal received invalid uploaded_file object (not active).")
@@ -251,10 +252,25 @@ class GenerativeAnalysisService:
 
             sections_info = json.loads(json_string_cleaned)
 
-            if not isinstance(sections_info, list) or not all(isinstance(item, dict) and 'sectionName' in item and 'pageRange' in item and
-                                                             isinstance(item['sectionName'], str) and isinstance(item['pageRange'], str)
-                                                             for item in sections_info):
-                 print("Parsed JSON does not match expected structure.")
+            if not isinstance(sections_info, list) or not all(
+                isinstance(item, dict) and 
+                'sectionName' in item and 
+                'pageRange' in item and 
+                'pages' in item and
+                isinstance(item['sectionName'], str) and 
+                isinstance(item['pageRange'], str) and
+                isinstance(item['pages'], list) and
+                all(
+                    isinstance(page, dict) and 
+                    'pageNumber' in page and 
+                    'pageLabel' in page and
+                    isinstance(page['pageNumber'], int) and 
+                    isinstance(page['pageLabel'], str)
+                    for page in item['pages']
+                )
+                for item in sections_info
+            ):
+                 print("Parsed JSON does not match expected structure with page metadata.")
                  print(f"Parsed Data: {sections_info}")
                  return None
 
@@ -407,6 +423,100 @@ class GenerativeAnalysisService:
             print(f"An error occurred during Gemini extraction analysis: {e}")
             return None
         # Cleanup handled in caller
+
+
+    async def combined_analyze_and_extract(
+        self,
+        uploaded_file: types.File,
+        analysis_prompt: str,
+        extraction_prompts: List[Any],  # List[PromptItem] from models
+        output_format_example: Optional[Dict[str, Any]] = None
+    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]:
+        """
+        Performs section analysis and extraction using the same uploaded file.
+        
+        Args:
+            uploaded_file: A genai.types.File object referencing the uploaded PDF.
+            analysis_prompt: Prompt for identifying document sections.
+            extraction_prompts: List of prompts for extracting data from sections.
+            output_format_example: Example JSON structure for extraction output.
+        
+        Returns:
+            Tuple of (sections_info, extraction_results) or (None, None) on failure.
+        """
+        if not uploaded_file or not uploaded_file.state == protos.File.State.ACTIVE:
+            print("combined_analyze_and_extract received invalid uploaded_file object (not active).")
+            return None, None
+        
+        if not analysis_prompt:
+            print("combined_analyze_and_extract received empty analysis_prompt.")
+            return None, None
+        
+        if not extraction_prompts:
+            print("combined_analyze_and_extract received empty extraction_prompts.")
+            return None, None
+        
+        try:
+            # Step 1: Analyze sections
+            print("Step 1: Analyzing document sections...")
+            sections_info = await self.analyze_sections_multimodal(uploaded_file, analysis_prompt)
+            if not sections_info:
+                print("Section analysis failed.")
+                return None, None
+            
+            print(f"Successfully identified {len(sections_info)} sections.")
+            
+            # Step 2: Extract data for each section
+            print("Step 2: Extracting data from each section...")
+            extraction_results = []
+            
+            for section in sections_info:
+                section_name = section['sectionName']
+                page_range = section['pageRange']
+                pages = section.get('pages', [])
+                
+                print(f"Extracting data from section '{section_name}' (pages {page_range})...")
+                
+                # Use the first extraction prompt for now (can be enhanced to handle multiple prompts)
+                extraction_prompt = extraction_prompts[0]
+                
+                # Create section-specific extraction prompt
+                section_extraction_prompt = f"""
+                Focus on the section "{section_name}" (pages {page_range}) of the document.
+                
+                {extraction_prompt.prompt_template}
+                
+                Extract data specifically from this section and return it in the specified format.
+                """
+                
+                # Add output format example if provided
+                if output_format_example:
+                    section_extraction_prompt += f"\n\nExpected output format:\n{json.dumps(output_format_example, indent=2)}"
+                
+                # Perform extraction for this section
+                section_data = await self.extract_structured_data_multimodal(
+                    uploaded_file, 
+                    section_extraction_prompt,
+                    output_format_example or {}
+                )
+                
+                if section_data:
+                    extraction_results.append({
+                        'section_name': section_name,
+                        'page_range': page_range,
+                        'extracted_data': section_data
+                    })
+                    print(f"Successfully extracted data from section '{section_name}'.")
+                else:
+                    print(f"Failed to extract data from section '{section_name}'.")
+            
+            print(f"Completed extraction for {len(extraction_results)} sections.")
+            return sections_info, extraction_results
+            
+        except Exception as e:
+            print(f"Error in combined_analyze_and_extract: {e}")
+            traceback.print_exc()
+            return None, None
 
 
     def delete_uploaded_file(self, file_name: str):

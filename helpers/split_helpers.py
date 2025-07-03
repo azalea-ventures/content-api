@@ -14,12 +14,12 @@ from models import (
     SplitRequest # Input type
 )
 # Import service class types for type hinting
-from services.google_drive_service import GoogleDriveService
+from services.google_drive_service import StorageService
 from services.pdf_splitter_service import PdfSplitterService
 
 async def process_single_split_request(
     split_request: SplitRequest,
-    drive_service: GoogleDriveService,
+    storage_service: StorageService,
     pdf_splitter_service: PdfSplitterService
 ) -> BatchSplitItemResult:
     original_drive_file_id = split_request.originalDriveFileId
@@ -27,7 +27,7 @@ async def process_single_split_request(
     original_drive_parent_folder_id = split_request.originalDriveParentFolderId
     sections_to_split_dicts = split_request.sections # List[SectionInfo] or List[Dict]
 
-    print(f"Processing split request for Drive file ID: {original_drive_file_id}")
+    print(f"Processing split request for file ID: {original_drive_file_id}")
 
     if not sections_to_split_dicts:
         return BatchSplitItemResult(
@@ -39,7 +39,7 @@ async def process_single_split_request(
         )
     if original_drive_parent_folder_id is None:
         # This check is important as uploading requires a parent folder.
-        print(f"Original Drive file ID {original_drive_file_id} has no parent folder. Cannot upload split sections.")
+        print(f"Original file ID {original_drive_file_id} has no parent folder. Cannot upload split sections.")
         return BatchSplitItemResult(
             success=False,
             error_info=SplitResponseItemError(
@@ -52,7 +52,7 @@ async def process_single_split_request(
     uploaded_files_info: List[UploadedFileInfo] = []
 
     try:
-        original_pdf_stream = drive_service.download_file_content(original_drive_file_id)
+        original_pdf_stream = storage_service.download_file_content(original_drive_file_id)
         if original_pdf_stream is None:
             # Add export fallback if necessary, similar to analyze helper
             if original_pdf_stream is None:
@@ -60,7 +60,7 @@ async def process_single_split_request(
                     success=False,
                     error_info=SplitResponseItemError(
                         originalDriveFileId=original_drive_file_id,
-                        error="Failed to download original Drive file for splitting."
+                        error="Failed to download original file for splitting."
                     )
                 )
         
@@ -97,9 +97,9 @@ async def process_single_split_request(
             
             final_uploaded_name = f"{base_original_name}_{section_file_name_part}" # Construct full name
 
-            print(f"Attempting to upload section '{section_name_raw}' as '{final_uploaded_name}' to Drive folder {original_drive_parent_folder_id}.")
+            print(f"Attempting to upload section '{section_name_raw}' as '{final_uploaded_name}' to folder {original_drive_parent_folder_id}.")
 
-            uploaded_drive_file_id = drive_service.upload_file_to_folder(
+            uploaded_file_id = storage_service.upload_file_to_folder(
                 file_name=final_uploaded_name,
                 mime_type='application/pdf', # Assuming split sections are PDFs
                 file_stream=section_file_stream,
@@ -107,24 +107,24 @@ async def process_single_split_request(
             )
             section_file_stream.close() # Close stream after upload
 
-            if uploaded_drive_file_id: # Check if upload was successful
+            if uploaded_file_id: # Check if upload was successful
                 uploaded_files_info.append(UploadedFileInfo(
                     sectionName=section_name_raw,
-                    uploadedDriveFileId=uploaded_drive_file_id,
+                    uploadedDriveFileId=uploaded_file_id,
                     uploadedDriveFileName=final_uploaded_name
                 ))
             else:
-                print(f"Failed to upload section '{section_name_raw}' to Drive.")
+                print(f"Failed to upload section '{section_name_raw}' to storage.")
                 # Decide if one failed upload should fail the whole item or just be omitted.
                 # For now, it's omitted from success list.
 
         if not uploaded_files_info: # If no sections were successfully uploaded
-            print(f"No sections were successfully uploaded to Drive for file ID {original_drive_file_id}.")
+            print(f"No sections were successfully uploaded for file ID {original_drive_file_id}.")
             return BatchSplitItemResult(
                 success=False,
                 error_info=SplitResponseItemError(
                     originalDriveFileId=original_drive_file_id,
-                    error="No sections were successfully uploaded to Google Drive."
+                    error="No sections were successfully uploaded to storage."
                 )
             )
 

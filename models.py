@@ -111,11 +111,48 @@ class BatchExtractTaskResult(BaseModel):
     result: Optional[ExtractTaskResponseItemSuccess] = None
     error_info: Optional[ExtractTaskResponseItemError] = None
 
-# --- Other existing models for /analyze, /split (UNCHANGED) ---
+# --- SHARED MODELS (Used by multiple endpoints) ---
 class SectionInfo(BaseModel):
     sectionName: str
     pageRange: str
 
+# --- NEW PAGE METADATA MODELS ---
+class PageInfo(BaseModel):
+    """Represents metadata for a single page"""
+    pageNumber: int
+    pageLabel: str
+
+class SectionWithPages(BaseModel):
+    """Represents a section with its page range and detailed page information"""
+    pageRange: str
+    sectionName: str
+    pages: List[PageInfo]
+
+# --- NEW COMBINED EXTRACT MODELS ---
+
+class SectionExtractionResult(BaseModel):
+    """Result for a single section's extraction"""
+    section_name: str
+    page_range: str
+    extracted_data: Dict[str, Any]  # The extracted data for this section
+
+class CombinedExtractRequest(BaseModel):
+    """Combined request for section analysis + extraction"""
+    target_drive_file_id: str
+    analysis_prompt: str  # Prompt for identifying sections
+    extraction_prompts: List[PromptItem]  # Prompts for extracting data from sections
+    output_json_format_example: Optional[Dict[str, Any]] = None  # Example format for extraction
+
+class CombinedExtractResponse(BaseModel):
+    """Response from combined extract endpoint"""
+    target_drive_file_id: str
+    target_drive_file_name: Optional[str] = None
+    sections: List[SectionInfo]  # Section analysis results
+    section_extractions: List[SectionExtractionResult]  # Extraction results per section
+    success: bool
+    error: Optional[str] = None
+
+# --- Other existing models for /analyze, /split (UPDATED) ---
 class AnalyzeRequestItem(BaseModel):
     file_id: str
     prompt_text: str
@@ -129,7 +166,7 @@ class AnalyzeResponseItemSuccess(BaseModel):
     originalDriveFileId: str
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
-    sections: List[SectionInfo]
+    sections: List[SectionWithPages]  # Updated to include page metadata
 
 class BatchAnalyzeItemResult(BaseModel):
     success: bool
