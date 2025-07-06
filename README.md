@@ -228,6 +228,69 @@ The API exposes the following endpoints:
     *   Retries prompts if their data dependencies are not yet met (`MAX_DATA_DEPENDENCY_RETRIES`).
     *   Retries API calls on failure up to `MAX_API_RETRIES_PER_TASK` (defined in `helpers/enhance_helpers.py`).
 
+### `/extract/refactored` (NEW)
+
+This endpoint accepts the `result` property from the `/analyze` response directly, making it easy to map in n8n workflows. It automatically adds default extraction prompts to each section and processes them.
+
+**Request Body:** The `result` property from the `/analyze` response (type: `AnalyzeResponseItemSuccess`)
+```json
+{
+  "originalDriveFileId": "your_file_id",
+  "originalDriveFileName": "document.pdf",
+  "originalDriveParentFolderId": "parent_folder_id",
+  "sections": [
+    {
+      "sectionName": "Introduction",
+      "pageRange": "1-3",
+      "pages": [
+        {"pageNumber": 1, "pageLabel": "1"},
+        {"pageNumber": 2, "pageLabel": "2"},
+        {"pageNumber": 3, "pageLabel": "3"}
+      ]
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "result": {
+    "originalDriveFileId": "your_file_id",
+    "originalDriveFileName": "document.pdf",
+    "originalDriveParentFolderId": "parent_folder_id",
+    "sections": [
+      {
+        "sectionName": "Introduction",
+        "pageRange": "1-3",
+        "pages": [
+          {"pageNumber": 1, "pageLabel": "1"},
+          {"pageNumber": 2, "pageLabel": "2"},
+          {"pageNumber": 3, "pageLabel": "3"}
+        ],
+        "prompts": [
+          {
+            "prompt_name": "extract_content",
+            "prompt_text": "Extract all relevant content from this section, including any key information, data, or important details.",
+            "result": "Content extracted from the introduction section..."
+          }
+        ]
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+**Key Features:**
+- **Easy n8n Integration**: Accepts the `result` property from `/analyze` response directly
+- **Automatic Prompt Generation**: Adds default extraction prompts to each section automatically
+- **Reuses Uploaded File**: Uses the same file from the analyze process to save resources
+- **Parallel Processing**: Processes each section's prompts in parallel with rate limiting
+- **Section Context**: Automatically adds section context and page range to prompts for better AI focus
+- **Error Handling**: Includes comprehensive retry logic and error handling
+
 ## Environment Variables
 
 The following environment variables are used by the application and should be defined in a `.env` file for local development or set in your deployment environment:

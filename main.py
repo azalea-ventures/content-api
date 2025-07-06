@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from config import settings
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 
 from google.oauth2.service_account import Credentials
@@ -28,7 +28,9 @@ from models import (
     BatchSplitItemResult, UploadedFileInfo, 
     ExtractTask, BatchExtractTaskResult, # Revised Extract models
     ExtractedDataDict,
-    CombinedExtractRequest, CombinedExtractResponse
+    CombinedExtractRequest, CombinedExtractResponse,
+    # New refactored extract models
+    RefactoredExtractResponse, SectionExtractPrompt, PageInfo, SectionWithPrompts, AnalyzeResultWithPrompts
 )
 
 from services.google_drive_service import GoogleDriveService, StorageService
@@ -49,6 +51,7 @@ from helpers.enhance_helpers import (
 )
 from helpers.extract_helpers import process_single_extract_task
 from helpers.combined_extract_helpers import process_combined_extract_request
+from helpers.refactored_extract_helpers import process_refactored_extract_request
 
 
 load_dotenv()
@@ -158,6 +161,22 @@ async def combined_extract_endpoint(request: CombinedExtractRequest):
     result = await process_combined_extract_request(request, storage_service, gemini_analysis_service)
     print(f"Finished combined extract for file: {request.target_drive_file_id}")
     
+    return result
+
+@app.post("/extract/refactored", response_model=RefactoredExtractResponse, status_code=status.HTTP_200_OK)
+async def refactored_extract_endpoint(request: AnalyzeResponseItemSuccess):
+    if not storage_service or not gemini_analysis_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Required services (Storage, Generative Analysis) are not configured or failed to initialize."
+        )
+
+    if not request:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
+
+    print(f"Refactored extract request for file: {request.originalDriveFileId}")
+    result = await process_refactored_extract_request(request, storage_service, gemini_analysis_service)
+    print(f"Finished refactored extract for file: {request.originalDriveFileId}")
     return result
 
 @app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)

@@ -152,6 +152,39 @@ class CombinedExtractResponse(BaseModel):
     success: bool
     error: Optional[str] = None
 
+# --- NEW REFACTORED EXTRACT MODELS ---
+
+class SectionExtractPrompt(BaseModel):
+    """A prompt to be executed for a specific section"""
+    prompt_name: str
+    prompt_text: str
+    result: Optional[str] = None  # Store the result directly on the prompt
+
+class SectionWithPrompts(BaseModel):
+    """A section with prompts for extraction (matches the attached format)"""
+    prompts: List[SectionExtractPrompt]
+    pageRange: str
+    sectionName: str
+    pages: List[PageInfo]
+
+class AnalyzeResultWithPrompts(BaseModel):
+    """The result structure from analyze with prompts added (matches the attached format)"""
+    originalDriveFileId: str
+    originalDriveFileName: str
+    originalDriveParentFolderId: str
+    sections: List[SectionWithPrompts]
+
+class RefactoredExtractRequest(BaseModel):
+    """New extract request that accepts analyze response data (matches the attached format)"""
+    success: bool
+    result: AnalyzeResultWithPrompts
+
+class RefactoredExtractResponse(BaseModel):
+    """Response from the refactored extract endpoint (matches the request format)"""
+    success: bool
+    result: AnalyzeResultWithPrompts
+    error: Optional[str] = None
+
 # --- Other existing models for /analyze, /split (UPDATED) ---
 class AnalyzeRequestItem(BaseModel):
     file_id: str
@@ -199,3 +232,6 @@ class SplitRequest(BaseModel):
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
     sections: List[SectionInfo]
+
+
+
