@@ -24,6 +24,7 @@ This API provides services to analyze, extract, and enhance structured data from
 *   **Content Enhancement**: Augments lesson data using generative AI based on a series of prompts.
 *   **Batch Processing**: Supports batch operations for most endpoints to efficiently process multiple documents or requests.
 *   **Asynchronous Operations**: Utilizes `asyncio` for non-blocking I/O operations, improving performance for concurrent requests.
+*   **File Upload Caching**: Intelligently caches uploaded files to avoid re-uploading the same content multiple times, reducing API calls and improving performance.
 
 ## Local Development Setup
 
@@ -96,6 +97,34 @@ The API exposes the following endpoints:
     }
     ```
 
+### Cache Management
+
+*   **Endpoint:** `GET /cache/status`
+*   **Description:** Get the current status of the file upload cache, including the number of cached files and their names.
+*   **Response (Success - 200 OK):**
+    ```json
+    {
+        "cache_enabled": true,
+        "cache_stats": {
+            "cached_files_count": 2,
+            "cached_file_names": ["file1.pdf", "file2.pdf"]
+        }
+    }
+    ```
+
+*   **Endpoint:** `POST /cache/cleanup`
+*   **Description:** Manually trigger cleanup of expired or inactive files from the cache.
+*   **Response (Success - 200 OK):**
+    ```json
+    {
+        "status": "cleanup_completed",
+        "cache_stats": {
+            "cached_files_count": 1,
+            "cached_file_names": ["file1.pdf"]
+        }
+    }
+    ```
+
 ### Extract Data
 
 *   **Endpoint:** `POST /extract`
@@ -146,16 +175,23 @@ The API exposes the following endpoints:
 ### Analyze Documents
 
 *   **Endpoint:** `POST /analyze`
-*   **Description:** Processes a batch of requests to perform generative analysis on sections of PDF files stored in Google Drive.
-*   **Request Body:** A list of `AnalyzeRequestItem` objects. See [`models.py`](./models.py) for the `AnalyzeRequestItem` structure.
+*   **Description:** Processes requests to perform generative analysis on sections of PDF files stored in Google Drive. Can optionally reuse existing files in Gemini AI storage to avoid duplicate uploads.
+*   **Request Body:** `AnalyzeRequestItem` object. See [`models.py`](./models.py) for the `AnalyzeRequestItem` structure.
     ```json
-    // Example AnalyzeRequestItem (within a list)
+    // Example AnalyzeRequestItem
     {
-        "file_id": "google_drive_pdf_file_id_to_analyze"
+        "file_id": "google_drive_pdf_file_id_to_analyze",
+        "prompt_text": "Identify the main sections of this document and their page ranges.",
+        "genai_file_name": "optional_existing_gemini_file_name"
     }
     ```
-*   **Response (Success - 200 OK):** A list of `BatchAnalyzeItemResult` objects (which can be `AnalyzeResponseItemSuccess` or `AnalyzeResponseItemError`). See [`models.py`](./models.py) for details.
+*   **Response (Success - 200 OK):** `BatchAnalyzeItemResult` object (which can be `AnalyzeResponseItemSuccess` or `AnalyzeResponseItemError`). See [`models.py`](./models.py) for details.
 *   **Dependencies:** `GoogleDriveService`, `GenerativeAnalysisService`.
+*   **New Feature - genai_file_name:**
+    - If `genai_file_name` is provided, the system will first check if that file exists in Gemini AI storage
+    - If the file exists and is active, it will be reused instead of uploading a new file
+    - If the file doesn't exist, the system will fall back to normal upload behavior
+    - This feature helps optimize performance by avoiding duplicate uploads when the same file needs to be analyzed multiple times
 
 ### Split Documents
 
@@ -299,4 +335,4 @@ The following environment variables are used by the application and should be de
 *   `GEMINI_API_KEY`: Your API key for accessing Google's Gemini models.
 *   `GEMINI_MODEL_ID`: The specific Gemini model to be used for generative tasks (e.g., `gemini-2.0-flash-latest`, `gemini-pro`).
 
-Refer to the `main.py` and service modules for detailed initialization and usage of these variables.
+

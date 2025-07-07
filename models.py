@@ -128,6 +128,7 @@ class SectionWithPages(BaseModel):
     pageRange: str
     sectionName: str
     pages: List[PageInfo]
+    prompts: Optional[List["SectionExtractPrompt"]] = None
 
 # --- NEW COMBINED EXTRACT MODELS ---
 
@@ -192,6 +193,7 @@ class RefactoredExtractResponse(BaseModel):
 class AnalyzeRequestItem(BaseModel):
     file_id: str
     prompt_text: str
+    genai_file_name: Optional[str] = None
 
 class AnalyzeResponseItemError(BaseModel):
     originalDriveFileId: str

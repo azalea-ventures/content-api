@@ -185,8 +185,8 @@ async def analyze_documents_endpoint(request: AnalyzeRequestItem):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Required services for /analyze not initialized.")
     if not request:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
-    print(f"Analyze request: file_id={request.file_id}")
-    result = await process_single_analyze_request(request.file_id, request.prompt_text, storage_service, gemini_analysis_service)
+    print(f"Analyze request: file_id={request.file_id}, genai_file_name={request.genai_file_name}")
+    result = await process_single_analyze_request(request.file_id, request.prompt_text, storage_service, gemini_analysis_service, request.genai_file_name)
     print(f"Finished analyze for file_id={request.file_id}.")
     return result
 

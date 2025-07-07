@@ -158,21 +158,31 @@ async def process_refactored_extract_request(
                 )
 
         # Transform the sections to include prompts for extraction
-        # For now, we'll add a default extraction prompt to each section
+        # Use prompts from the request if available, otherwise create a default prompt
         sections_with_prompts = []
         for section in request.sections:
-            # Create a default extraction prompt for each section
-            default_prompt = SectionExtractPrompt(
-                prompt_name="extract_content",
-                prompt_text="Extract all relevant content from this section, including any key information, data, or important details."
-            )
-            
-            section_with_prompts = SectionWithPrompts(
-                prompts=[default_prompt],
-                pageRange=section.pageRange,
-                sectionName=section.sectionName,
-                pages=section.pages
-            )
+            # Check if the section already has prompts
+            if section.prompts:
+                # Use the existing prompts from the section
+                section_with_prompts = SectionWithPrompts(
+                    prompts=section.prompts,
+                    pageRange=section.pageRange,
+                    sectionName=section.sectionName,
+                    pages=section.pages
+                )
+            else:
+                # Create a default extraction prompt for sections without prompts
+                default_prompt = SectionExtractPrompt(
+                    prompt_name="extract_content",
+                    prompt_text="Extract all relevant content from this section, including any key information, data, or important details."
+                )
+                
+                section_with_prompts = SectionWithPrompts(
+                    prompts=[default_prompt],
+                    pageRange=section.pageRange,
+                    sectionName=section.sectionName,
+                    pages=section.pages
+                )
             sections_with_prompts.append(section_with_prompts)
 
         # Create the transformed request structure

@@ -24,41 +24,66 @@ async def process_single_analyze_request(
     file_id: str,
     prompt_text: str,
     storage_service: StorageService,
-    gemini_analysis_service: GenerativeAnalysisService
+    gemini_analysis_service: GenerativeAnalysisService,
+    genai_file_name: Optional[str] = None
 ) -> BatchAnalyzeItemResult:
     print(f"Processing analyze request for file ID: {file_id}")
     uploaded_file: Optional[genai_types_google.File] = None
     try:
-        original_file_info = storage_service.get_file_info(file_id)
-        if original_file_info is None:
-            return BatchAnalyzeItemResult(
-                success=False,
-                error_info=AnalyzeResponseItemError(
-                    originalDriveFileId=file_id,
-                    error="Original file not found or permission denied to get info."
+        # Check if genai_file_name is provided and try to find existing file
+        if genai_file_name:
+            print(f"Checking for existing Gemini AI file: {genai_file_name}")
+            uploaded_file = await gemini_analysis_service.get_file_by_name(genai_file_name)
+            if uploaded_file:
+                print(f"Found existing Gemini AI file: {genai_file_name}")
+            else:
+                print(f"Gemini AI file not found: {genai_file_name}. Will proceed with normal upload.")
+        
+        # If no existing file found, proceed with normal file processing
+        if not uploaded_file:
+            original_file_info = storage_service.get_file_info(file_id)
+            if original_file_info is None:
+                return BatchAnalyzeItemResult(
+                    success=False,
+                    error_info=AnalyzeResponseItemError(
+                        originalDriveFileId=file_id,
+                        error="Original file not found or permission denied to get info."
+                    )
                 )
-            )
-        original_file_name = original_file_info.get('name', file_id)
-        # For GoogleDriveService, 'parents' is a list; for Supabase, use 'user_id' as parent/folder equivalent
-        original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
+            original_file_name = original_file_info.get('name', file_id)
+            # For GoogleDriveService, 'parents' is a list; for Supabase, use 'user_id' as parent/folder equivalent
+            original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
 
-        # Check file size before processing to prevent memory issues
-        file_size = original_file_info.get('size', 0)
-        if file_size > 50 * 1024 * 1024:  # 50MB limit
-            return BatchAnalyzeItemResult(
-                success=False,
-                error_info=AnalyzeResponseItemError(
-                    originalDriveFileId=file_id,
-                    error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
+            # Check file size before processing to prevent memory issues
+            file_size = original_file_info.get('size', 0)
+            if file_size > 50 * 1024 * 1024:  # 50MB limit
+                return BatchAnalyzeItemResult(
+                    success=False,
+                    error_info=AnalyzeResponseItemError(
+                        originalDriveFileId=file_id,
+                        error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
+                    )
                 )
-            )
 
-        # Use the new method that only downloads if needed
-        uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis_by_file_id(
-            file_id, 
-            original_file_name, 
-            storage_service
-        )
+            # Use the new method that only downloads if needed
+            uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis_by_file_id(
+                file_id, 
+                original_file_name, 
+                storage_service
+            )
+        else:
+            # Use existing file info for response
+            original_file_info = storage_service.get_file_info(file_id)
+            if original_file_info is None:
+                return BatchAnalyzeItemResult(
+                    success=False,
+                    error_info=AnalyzeResponseItemError(
+                        originalDriveFileId=file_id,
+                        error="Original file not found or permission denied to get info."
+                    )
+                )
+            original_file_name = original_file_info.get('name', file_id)
+            original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
         if uploaded_file is None:
             return BatchAnalyzeItemResult(
                 success=False,
@@ -105,7 +130,7 @@ async def process_single_analyze_request(
                 originalDriveFileName=original_file_name,
                 originalDriveParentFolderId=original_parent_folder_id,
                 sections=sections_with_pages,
-                genai_file_name=uploaded_file.name
+                genai_file_name=genai_file_name if genai_file_name else uploaded_file.name
             )
         )
     except Exception as ex:

@@ -400,10 +400,7 @@ class GenerativeAnalysisService:
                 model_with_file = genai.GenerativeModel(self.model_id)
                 
                 # Generate content using the model with the file
-                response = await asyncio.to_thread(
-                    model_with_file.generate_content,
-                    [analysis_prompt, file], generation_config={"response_mime_type": "application/json", "response_schema": list[SectionWithPages]}
-                )
+                response = await model_with_file.generate_content_async(contents=[analysis_prompt, file], generation_config={"response_mime_type": "application/json", "response_schema": list[SectionWithPages]})
 
                 if response and response.text:
                     print(f"Successfully analyzed PDF sections. Response length: {len(response.text)} characters")
