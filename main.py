@@ -398,4 +398,23 @@ async def health_check():
         return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "One or more required services not initialized. Check configuration and logs."})
     return {"status": "ok"}
 
+@app.get("/debug/files", status_code=status.HTTP_200_OK)
+async def debug_files():
+    """Debug endpoint to list all files in Google AI storage."""
+    if not gemini_analysis_service:
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "Generative Analysis service not initialized."})
+    
+    try:
+        # Get all files from Google AI storage
+        all_files = await gemini_analysis_service.list_all_uploaded_files()
+        
+        return {
+            "google_ai_storage_files": all_files,
+            "total_files_in_storage": len(all_files)
+        }
+    except Exception as e:
+        print(f"Error during debug files request: {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": str(e)})
+
 # To run locally: uvicorn main:app --reload

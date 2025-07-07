@@ -2,7 +2,6 @@
 
 import io
 import os
-import uuid
 import re
 import traceback # Keep for consistency if you use it
 from typing import Optional, List, Dict, Any # Keep Any if used elsewhere
@@ -28,8 +27,7 @@ async def process_single_analyze_request(
     gemini_analysis_service: GenerativeAnalysisService
 ) -> BatchAnalyzeItemResult:
     print(f"Processing analyze request for file ID: {file_id}")
-    pdf_stream: Optional[io.BytesIO] = None
-    uploaded_file: Optional[genai_types_google.File] = None # Use alias for clarity
+    uploaded_file: Optional[genai_types_google.File] = None
     try:
         original_file_info = storage_service.get_file_info(file_id)
         if original_file_info is None:
@@ -44,7 +42,7 @@ async def process_single_analyze_request(
         # For GoogleDriveService, 'parents' is a list; for Supabase, use 'user_id' as parent/folder equivalent
         original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
 
-        # Check file size before downloading to prevent memory issues
+        # Check file size before processing to prevent memory issues
         file_size = original_file_info.get('size', 0)
         if file_size > 50 * 1024 * 1024:  # 50MB limit
             return BatchAnalyzeItemResult(
@@ -55,32 +53,18 @@ async def process_single_analyze_request(
                 )
             )
 
-        pdf_stream = storage_service.download_file_content(file_id)
-        if pdf_stream is None:
-            # Attempt export if direct download fails (e.g. Google Doc)
-            pdf_stream = storage_service.export_google_doc_as_pdf(file_id)
-            if pdf_stream is None:
-                return BatchAnalyzeItemResult(
-                    success=False,
-                    error_info=AnalyzeResponseItemError(
-                        originalDriveFileId=file_id,
-                        error="Failed to download original file content."
-                    )
-                )
-
-        display_name_base = os.path.splitext(original_file_name)[0]
-        display_name_sanitized = re.sub(r'[^\w\s.-]', '', display_name_base).strip()
-        if not display_name_sanitized:
-            display_name_sanitized = file_id
-        display_name = f"{display_name_sanitized}_{uuid.uuid4().hex}.pdf"
-
-        uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, display_name)
+        # Use the new method that only downloads if needed
+        uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis_by_file_id(
+            file_id, 
+            original_file_name, 
+            storage_service
+        )
         if uploaded_file is None:
             return BatchAnalyzeItemResult(
                 success=False,
                 error_info=AnalyzeResponseItemError(
                     originalDriveFileId=file_id,
-                    error="Failed to upload document to Google AI for analysis."
+                    error="Failed to upload file for analysis."
                 )
             )
 
@@ -120,7 +104,8 @@ async def process_single_analyze_request(
                 originalDriveFileId=file_id,
                 originalDriveFileName=original_file_name,
                 originalDriveParentFolderId=original_parent_folder_id,
-                sections=sections_with_pages
+                sections=sections_with_pages,
+                genai_file_name=uploaded_file.name
             )
         )
     except Exception as ex:
@@ -135,15 +120,4 @@ async def process_single_analyze_request(
             )
         )
     finally:
-        # Explicit memory cleanup
-        if pdf_stream:
-            try:
-                pdf_stream.close()
-                del pdf_stream
-            except Exception as e:
-                print(f"Error closing PDF stream: {e}")
-        if uploaded_file and hasattr(uploaded_file, 'name') and gemini_analysis_service:
-            try:
-                gemini_analysis_service.delete_uploaded_file(uploaded_file.name)
-            except Exception as cleanup_ex:
-                print(f"Error during cleanup of uploaded file {uploaded_file.name}: {cleanup_ex}")
+        pass

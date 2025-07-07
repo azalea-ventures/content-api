@@ -67,7 +67,18 @@ async def _execute_section_extraction_api_call(
         final_instructions
     ]
 
-    status, api_output_data = await gemini_service.generate_text(multimodal_prompt_parts)
+    # For multimodal prompts (file + text), use generate_content_async directly
+    try:
+        response = await gemini_service.model.generate_content_async(multimodal_prompt_parts)
+        if response and response.text:
+            api_output_data = response.text
+            status = "SUCCESS"
+        else:
+            api_output_data = "No response text received"
+            status = "ERROR_EMPTY"
+    except Exception as e:
+        api_output_data = str(e)
+        status = "ERROR_API"
 
     if status == "SUCCESS":
         prompt.result = api_output_data
@@ -109,34 +120,42 @@ async def process_refactored_extract_request(
 
     extraction_ctx = RefactoredExtractionContext(target_drive_file_id=target_file_id)
     extraction_ctx.target_drive_file_name = request.originalDriveFileName
-    
-    pdf_stream: Optional[io.BytesIO] = None
 
     try:
-        # Verify file exists and get info
-        target_file_info = storage_service.get_file_info(target_file_id)
-        if target_file_info is None:
-            return RefactoredExtractResponse(
-                success=False,
-                error="Target Drive file not found or permission denied."
+        if request.genai_file_name:
+            extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.get_file_by_name(request.genai_file_name)
+            if not extraction_ctx.uploaded_target_gfile:
+                return RefactoredExtractResponse(
+                    success=False,
+                    result=None,
+                    error=f"Failed to retrieve existing Gemini file: {request.genai_file_name}"
+                )
+        else:
+            target_file_info = storage_service.get_file_info(target_file_id)
+            if target_file_info is None:
+                return RefactoredExtractResponse(
+                    success=False,
+                    result=None,
+                    error="Target Drive file not found or permission denied."
+                )
+            file_size = target_file_info.get('size', 0)
+            if file_size > 50 * 1024 * 1024:
+                return RefactoredExtractResponse(
+                    success=False,
+                    result=None,
+                    error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
+                )
+            extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.upload_pdf_for_analysis_by_file_id(
+                request.originalDriveFileId,
+                request.originalDriveFileName,
+                storage_service
             )
-
-        # Download and upload the file for AI analysis (reusing the same file from analyze)
-        pdf_stream = storage_service.download_file_content(target_file_id)
-        if pdf_stream is None:
-            return RefactoredExtractResponse(
-                success=False,
-                error="Failed to download target file content."
-            )
-
-        target_gfile_display_name = f"refactored_extract_target_{os.path.splitext(extraction_ctx.target_drive_file_name or 'unknown')[0]}_{uuid.uuid4().hex[:8]}.pdf"
-        extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, target_gfile_display_name)
-        
-        if extraction_ctx.uploaded_target_gfile is None:
-            return RefactoredExtractResponse(
-                success=False,
-                error="Failed to upload target document for AI extraction."
-            )
+            if extraction_ctx.uploaded_target_gfile is None:
+                return RefactoredExtractResponse(
+                    success=False,
+                    result=None,
+                    error="Failed to upload target document for AI extraction."
+                )
 
         # Transform the sections to include prompts for extraction
         # For now, we'll add a default extraction prompt to each section
@@ -260,7 +279,8 @@ async def process_refactored_extract_request(
         print(f"Finished processing refactored extract for file ID: {target_file_id}")
         return RefactoredExtractResponse(
             success=True,
-            result=transformed_request  # Return the transformed structure with populated results
+            result=transformed_request,
+            genai_file_name=extraction_ctx.uploaded_target_gfile.name
         )
 
     except Exception as ex:
@@ -268,13 +288,10 @@ async def process_refactored_extract_request(
         traceback.print_exc()
         return RefactoredExtractResponse(
             success=False,
+            result=None,
             error=f"An internal server error occurred during extraction: {str(ex)}"
         )
     finally:
-        if pdf_stream:
-            pdf_stream.close()
-        if extraction_ctx.uploaded_target_gfile and hasattr(extraction_ctx.uploaded_target_gfile, 'name') and gemini_analysis_service:
-            try:
-                gemini_analysis_service.delete_uploaded_file(extraction_ctx.uploaded_target_gfile.name)
-            except Exception as cleanup_ex:
-                print(f"Error during cleanup of uploaded file {extraction_ctx.uploaded_target_gfile.name}: {cleanup_ex}") 
+        # Note: File cleanup is not performed here as files are needed for subsequent processing
+        # Gemini AI automatically cleans up unused files after a few hours
+        pass 

@@ -24,27 +24,24 @@ async def process_combined_extract_request(
     Processes a combined extract request: analyzes sections and extracts data.
     Uploads the file once to Gemini and uses it for both operations.
     """
-    pdf_stream: Optional[io.BytesIO] = None
-    uploaded_file: Optional[Any] = None  # types.File from genai
+    uploaded_file: Optional[Any] = None
     
     try:
         print(f"Processing combined extract request for file ID: {request.target_drive_file_id}")
         
-        # Download the target file
-        pdf_stream = storage_service.download_file_content(request.target_drive_file_id)
-        if not pdf_stream:
+        # Get file info for display name and size check
+        file_info = storage_service.get_file_info(request.target_drive_file_id)
+        if not file_info:
             return CombinedExtractResponse(
                 target_drive_file_id=request.target_drive_file_id,
                 success=False,
-                error="Failed to download target file"
+                error="Failed to get file info"
             )
         
-        # Get file info for display name
-        file_info = storage_service.get_file_info(request.target_drive_file_id)
-        file_name = file_info.get('name', request.target_drive_file_id) if file_info else request.target_drive_file_id
+        file_name = file_info.get('name', request.target_drive_file_id)
         
-        # Check file size before uploading
-        file_size = file_info.get('size', 0) if file_info else 0
+        # Check file size before processing
+        file_size = file_info.get('size', 0)
         if file_size > 50 * 1024 * 1024:  # 50MB limit
             return CombinedExtractResponse(
                 target_drive_file_id=request.target_drive_file_id,
@@ -52,9 +49,13 @@ async def process_combined_extract_request(
                 error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
             )
         
-        # Upload file once to Gemini
+        # Use the new method that only downloads if needed
         display_name = f"combined_extract_{os.path.splitext(file_name)[0]}_{uuid.uuid4().hex[:8]}.pdf"
-        uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, display_name)
+        uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis_by_file_id(
+            request.target_drive_file_id,
+            display_name,
+            storage_service
+        )
         
         if not uploaded_file:
             return CombinedExtractResponse(
@@ -103,7 +104,8 @@ async def process_combined_extract_request(
             target_drive_file_name=file_name,
             sections=sections,
             section_extractions=section_extractions,
-            success=True
+            success=True,
+            genai_file_name=uploaded_file.name
         )
         
     except Exception as e:
@@ -115,16 +117,6 @@ async def process_combined_extract_request(
             error=f"An internal server error occurred during combined extract: {str(e)}"
         )
     finally:
-        # Cleanup
-        if pdf_stream:
-            try:
-                pdf_stream.close()
-                del pdf_stream
-            except Exception as e:
-                print(f"Error closing PDF stream: {e}")
-        if uploaded_file and hasattr(uploaded_file, 'name') and gemini_analysis_service:
-            try:
-                gemini_analysis_service.delete_uploaded_file(uploaded_file.name)
-                print(f"Successfully cleaned up uploaded file: {uploaded_file.name}")
-            except Exception as cleanup_ex:
-                print(f"Error during cleanup of uploaded file {uploaded_file.name}: {cleanup_ex}") 
+        # Note: File cleanup is not performed here as files are needed for subsequent processing
+        # Gemini AI automatically cleans up unused files after a few hours
+        pass 

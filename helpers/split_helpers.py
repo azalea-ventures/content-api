@@ -52,17 +52,37 @@ async def process_single_split_request(
     uploaded_files_info: List[UploadedFileInfo] = []
 
     try:
+        # Get file info first to check size
+        file_info = storage_service.get_file_info(original_drive_file_id)
+        if file_info is None:
+            return BatchSplitItemResult(
+                success=False,
+                error_info=SplitResponseItemError(
+                    originalDriveFileId=original_drive_file_id,
+                    error="Failed to get file info for splitting."
+                )
+            )
+        
+        # Check file size before downloading
+        file_size = file_info.get('size', 0)
+        if file_size > 50 * 1024 * 1024:  # 50MB limit
+            return BatchSplitItemResult(
+                success=False,
+                error_info=SplitResponseItemError(
+                    originalDriveFileId=original_drive_file_id,
+                    error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
+                )
+            )
+        
         original_pdf_stream = storage_service.download_file_content(original_drive_file_id)
         if original_pdf_stream is None:
-            # Add export fallback if necessary, similar to analyze helper
-            if original_pdf_stream is None:
-                return BatchSplitItemResult(
-                    success=False,
-                    error_info=SplitResponseItemError(
-                        originalDriveFileId=original_drive_file_id,
-                        error="Failed to download original file for splitting."
-                    )
+            return BatchSplitItemResult(
+                success=False,
+                error_info=SplitResponseItemError(
+                    originalDriveFileId=original_drive_file_id,
+                    error="Failed to download original file for splitting."
                 )
+            )
         
         # Convert SectionInfo objects to dictionaries for the PDF splitter service
         sections_as_dicts = [

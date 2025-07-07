@@ -98,6 +98,7 @@ class ExtractTaskResponseItemSuccess(BaseModel):
     target_drive_file_id: str
     target_drive_file_name: Optional[str] = None
     extraction_results: List[GeneratedContentItem]
+    genai_file_name: Optional[str] = None
 
 class ExtractTaskResponseItemError(BaseModel):
     task_id: str
@@ -151,6 +152,7 @@ class CombinedExtractResponse(BaseModel):
     section_extractions: List[SectionExtractionResult]  # Extraction results per section
     success: bool
     error: Optional[str] = None
+    genai_file_name: Optional[str] = None
 
 # --- NEW REFACTORED EXTRACT MODELS ---
 
@@ -182,8 +184,9 @@ class RefactoredExtractRequest(BaseModel):
 class RefactoredExtractResponse(BaseModel):
     """Response from the refactored extract endpoint (matches the request format)"""
     success: bool
-    result: AnalyzeResultWithPrompts
+    result: Optional[AnalyzeResultWithPrompts] = None
     error: Optional[str] = None
+    genai_file_name: Optional[str] = None
 
 # --- Other existing models for /analyze, /split (UPDATED) ---
 class AnalyzeRequestItem(BaseModel):
@@ -200,6 +203,7 @@ class AnalyzeResponseItemSuccess(BaseModel):
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
     sections: List[SectionWithPages]  # Updated to include page metadata
+    genai_file_name: Optional[str] = None
 
 class BatchAnalyzeItemResult(BaseModel):
     success: bool

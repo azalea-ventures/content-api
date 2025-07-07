@@ -13,6 +13,11 @@ from google.generativeai import types
 # Import protos to access the File.State enum
 from google.generativeai import protos # <-- ADD THIS IMPORT
 from google.api_core.exceptions import ResourceExhausted, GoogleAPIError # For specific error catching
+from config import settings
+
+# Import StorageService for type hinting
+from models import SectionWithPages
+from services.google_drive_service import StorageService
 
 # No longer need Credentials here, genai is configured with API key
 # from google.oauth2.service_account import Credentials
@@ -47,483 +52,524 @@ class GenerativeAnalysisService:
 
     async def generate_text(self, prompt_text: str) -> Tuple[str, Optional[str]]:
         """
-        Generates text content from a given prompt using the configured Gemini model.
-        FORCES "application/json" as the response_mime_type.
-        Returns a tuple: (status: str, content: Optional[str])
-        Status can be: "SUCCESS", "RATE_LIMIT", "ERROR_BLOCKED", "ERROR_API", 
-                       "ERROR_EMPTY", "ERROR_NO_MODEL", "ERROR_INVALID_JSON"
-        """
-        if not self.model:
-            print("Error: Gemini model not initialized in GenerativeAnalysisService.")
-            return "ERROR_NO_MODEL", "Gemini model not initialized."
+        Generates text using the Gemini model.
 
-        # Always configure for JSON output for this method
-        generation_config = types.GenerationConfig(
-            response_mime_type="application/json"
-            # You can add other default generation configs here if needed for this method:
-            # temperature=0.5,
-            # max_output_tokens=1024, # Ensure this is large enough for your JSONs
-        )
-        print(f"GenerativeAnalysisService: Sending prompt for JSON output (len {len(prompt_text)})...")
+        Args:
+            prompt_text: The text prompt to send to the model.
+
+        Returns:
+            A tuple containing (generated_text, error_message). If successful, error_message is None.
+        """
+        if not prompt_text or not prompt_text.strip():
+            return "ERROR_INPUT", "Empty or invalid prompt text provided."
 
         try:
-            response = await self.model.generate_content_async(
-                prompt_text,
-                generation_config=generation_config # Pass the config here
+            print(f"Generating text with model: {self.model_id}")
+            print(f"Prompt length: {len(prompt_text)} characters")
+
+            # Generate content using the model
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                prompt_text
             )
-            print(f'CACHED TOKENS: {response.usage_metadata.cached_content_token_count}')
-            if response and response.candidates:
-                candidate = response.candidates[0]
-                finish_reason_obj = getattr(candidate, 'finish_reason', None)
-                finish_reason_name = finish_reason_obj.name if finish_reason_obj else 'UNKNOWN'
 
-                if finish_reason_name == "SAFETY":
-                    safety_ratings_str = str(getattr(candidate, 'safety_ratings', 'No safety ratings available'))
-                    print(f"Warning: Content generation stopped by API due to safety ratings: {safety_ratings_str}")
-                    return "ERROR_BLOCKED", f"Content generation blocked by API due to safety ({safety_ratings_str})."
+            if response and response.text:
+                print(f"Successfully generated text. Response length: {len(response.text)} characters")
+                return response.text, None
+            else:
+                print("No text generated in response")
+                return "ERROR_NO_RESPONSE", "No text was generated in the response."
 
-                if candidate.content and candidate.content.parts:
-                    generated_text = "".join(part.text for part in candidate.content.parts if hasattr(part, 'text'))
-                    if generated_text.strip():
-                        # Since we requested JSON, attempt to parse it to validate.
-                        try:
-                            json.loads(generated_text) # Validate JSON structure
-                            # If parsing is successful, it's valid JSON.
-                            print(f"SUCCESS (JSON validated): Prompt processed.")
-                            return "SUCCESS", generated_text
-                        except json.JSONDecodeError as json_e:
-                            error_message = f"API returned invalid JSON despite mime_type request. Error: {json_e}. Raw text: '{generated_text[:200]}...'"
-                            print(f"Warning: {error_message}")
-                            return "ERROR_INVALID_JSON", error_message
-                    else: # Empty text from API
-                        print(f"Warning: Gemini API returned empty text (expected JSON). Finish reason: {finish_reason_name}")
-                        return "ERROR_EMPTY", f"Gemini API returned empty text (expected JSON, finish reason: {finish_reason_name})."
-                else: # No parts or empty parts
-                    print(f"Warning: Gemini API returned no content parts (expected JSON). Finish reason: {finish_reason_name}")
-                    return "ERROR_EMPTY", f"Gemini API returned no content parts (expected JSON, finish reason: {finish_reason_name})."
-            
-            elif response and response.prompt_feedback and response.prompt_feedback.block_reason:
-                # ... (same prompt feedback block reason handling as before) ...
-                block_reason_obj = response.prompt_feedback.block_reason
-                block_reason_name = block_reason_obj.name if block_reason_obj else "UNKNOWN"
-                block_reason_message = response.prompt_feedback.block_reason_message or block_reason_name
-                print(f"Warning: Prompt blocked by Gemini. Reason: {block_reason_name} - {block_reason_message}")
-                return "ERROR_BLOCKED", f"Prompt blocked by API (Reason: {block_reason_message})."
-            else: # No candidates and no clear block reason
-                print("Warning: Gemini API returned no candidates (expected JSON).")
-                return "ERROR_EMPTY", "Gemini API returned no candidates (expected JSON)."
+        except ResourceExhausted as e:
+            print(f"RESOURCE EXHAUSTED: {e}")
+            return "ERROR_RESOURCE_EXHAUSTED", f"Resource exhausted: {str(e)}"
 
-        except ResourceExhausted as r_exc:
-            print(f"RATE LIMIT: Gemini API rate limit exceeded. {r_exc}")
-            return "RATE_LIMIT", f"Gemini API rate limit exceeded: {str(r_exc)}"
-        except GoogleAPIError as api_exc:
-            # This can also catch errors if the model can't generate JSON for the prompt
-            # e.g. google.api_core.exceptions.InvalidArgument: 400 Response must be valid JSON.
-            print(f"API ERROR: Error during Gemini text generation: {api_exc}")
-            traceback.print_exc()
-            # Check if it's specifically a JSON generation failure from the API
-            if "Response must be valid JSON" in str(api_exc) or "Could not decode response" in str(api_exc) :
-                 return "ERROR_API_CANT_GENERATE_JSON", f"Gemini API could not generate valid JSON for the prompt: {str(api_exc)}"
-            return "ERROR_API", f"Gemini API error: {str(api_exc)}"
+        except GoogleAPIError as e:
+            print(f"GOOGLE API ERROR: {e}")
+            return "ERROR_GOOGLE_API", f"Google API error: {str(e)}"
+
         except Exception as e:
             print(f"UNEXPECTED ERROR: Error during Gemini text generation: {e}")
             traceback.print_exc()
             return "ERROR_API", f"Unexpected error during API call: {str(e)}"
 
+    async def find_file_by_display_name(self, display_name: str) -> Optional[types.File]:
+        """
+        Search for an active file in Gemini AI storage by display name.
+        
+        Args:
+            display_name: The display name to search for
+            
+        Returns:
+            An active types.File object if found, None otherwise
+        """
+        try:
+            print(f"DEBUG: Searching all files in Gemini AI storage for display name: '{display_name}'")
+            files = list(genai.list_files())  # Convert generator to list
+            print(f"DEBUG: Found {len(files)} total files in Gemini AI storage to search through")
+            
+            for i, file in enumerate(files, 1):
+                print(f"DEBUG: [{i}/{len(files)}] Checking file - Name: '{file.name}', Display: '{file.display_name}'")
+                
+                # Try multiple comparison methods for robustness
+                exact_match = file.display_name == display_name
+                case_insensitive_match = file.display_name.lower() == display_name.lower()
+                stripped_match = file.display_name.strip() == display_name.strip()
+                
+                if exact_match or case_insensitive_match or stripped_match:
+                    print(f"DEBUG: ✓ MATCH FOUND! - Name: '{file.name}' (length: {len(file.name)}), State: {file.state}")
+                    if not exact_match:
+                        print(f"DEBUG: Match type - Exact: {exact_match}, Case-insensitive: {case_insensitive_match}, Stripped: {stripped_match}")
+                    
+                    if file.state == protos.File.State.ACTIVE:
+                        print(f"DEBUG: ✓ File is ACTIVE and ready for use")
+                        return file
+                    else:
+                        print(f"DEBUG: ✗ File is not ACTIVE (state: {file.state})")
+                        return None
+            
+            print(f"DEBUG: No matching file found with display name: '{display_name}'")
+            return None
+            
+        except Exception as e:
+            print(f"DEBUG: Error searching for file with display name '{display_name}': {e}")
+            return None
+
+    async def list_all_uploaded_files(self) -> List[Dict[str, Any]]:
+        """
+        List all files currently uploaded to Google AI storage.
+        
+        Returns:
+            List of dictionaries containing file information
+        """
+        try:
+            files = list(genai.list_files())  # Convert generator to list
+            
+            file_list = []
+            for file in files:
+                file_info = {
+                    "name": file.name,
+                    "display_name": file.display_name,
+                    "state": file.state.name if hasattr(file.state, 'name') else str(file.state),
+                    "uri": file.uri,
+                    "size_bytes": getattr(file, 'size_bytes', None),
+                    "expiration_time": getattr(file, 'expiration_time', None)
+                }
+                file_list.append(file_info)
+            
+            return file_list
+            
+        except Exception as e:
+            print(f"Error listing uploaded files: {e}")
+            traceback.print_exc()
+            return []
+
     async def upload_pdf_for_analysis(self, pdf_stream: io.BytesIO, display_name: str) -> Optional[types.File]:
         """
         Uploads a PDF stream to Google AI's temporary storage for analysis.
-        Uses the API key configured via genai.configure().
-
-        Args:
-            pdf_stream: An io.BytesIO stream containing the PDF content.
-            display_name: A name for the file in Google AI storage (e.g., the original filename).
-
-        Returns:
-            A genai.types.File object referencing the uploaded file, or None on failure.
+        Always uploads a new file - no duplicate checking.
         """
         if not pdf_stream or pdf_stream.getbuffer().nbytes == 0:
             print("PDF stream is empty or invalid for upload.")
             return None
-
         pdf_stream.seek(0)
-
         try:
-            print(f"Uploading PDF '{display_name}' to Google AI storage using configured API key...")
             uploaded_file = genai.upload_file(
                 path=pdf_stream,
                 display_name=display_name,
                 mime_type='application/pdf',
             )
-            print(f"Uploaded file '{display_name}' with URI: {uploaded_file.uri}")
-
-            print("Polling file state for processing...")
-            max_polls = 60 # Max 60 polls = 5 minutes (5 seconds per poll)
+            max_polls = 60
             poll_count = 0
-            # *** CORRECTED ENUM REFERENCE ***
             while uploaded_file.state == protos.File.State.PROCESSING and poll_count < max_polls:
                 await asyncio.sleep(5)
-                uploaded_file = genai.get_file(file_name=uploaded_file.name)
-                print(f"File state: {uploaded_file.state}")
+                uploaded_file = genai.get_file(name=uploaded_file.name)
                 poll_count += 1
-
-            # After polling loop, check final state
-            # *** CORRECTED ENUM REFERENCE ***
             if uploaded_file.state == protos.File.State.FAILED:
-                print(f"File upload and processing failed. Final state: {uploaded_file.state}, Cause: {uploaded_file.state.cause}")
                 return None
-            # *** CORRECTED ENUM REFERENCE ***
-            if uploaded_file.state == protos.File.State.PROCESSING: # Check if loop exited due to max_polls
-                 print(f"File processing timed out after {max_polls * 5} seconds. Final state: {uploaded_file.state}")
-                 return None
-            # *** CORRECTED ENUM REFERENCE ***
-            if not uploaded_file.state == protos.File.State.ACTIVE: # ACTIVE
-                 print(f"File did not reach ACTIVE state (expected {protos.File.State.ACTIVE}). Final state: {uploaded_file.state}")
-                 return None
-
-            print("File is active and ready for analysis.")
+            if uploaded_file.state == protos.File.State.PROCESSING:
+                return None
+            if not uploaded_file.state == protos.File.State.ACTIVE:
+                return None
             return uploaded_file
-
         except Exception as e:
             print(f"Error during PDF upload to Google AI: {e}")
             return None
-        # finally block is in the caller
 
-
-    async def analyze_sections_multimodal(self, uploaded_file: types.File, prompt_text: str) -> Optional[List[Dict[str, Any]]]:
+    async def upload_pdf_for_analysis_by_file_id(
+        self, 
+        file_id: str, 
+        display_name: str, 
+        storage_service: 'StorageService'
+    ) -> Optional[types.File]:
         """
-        Analyzes a PDF file reference for section headings, their page ranges, and page metadata using a user-supplied prompt.
-        Returns a list of dictionaries with section information including page details.
+        Uploads a PDF to Google AI's temporary storage for analysis by file ID.
+        Always downloads and uploads a new file - no duplicate checking.
         """
-        if not uploaded_file or not uploaded_file.state == protos.File.State.ACTIVE:
-            print("analyze_sections_multimodal received invalid uploaded_file object (not active).")
-            print(f"Uploaded file state: {uploaded_file.state}")
-            return None
-
-        if not prompt_text:
-            print("analyze_sections_multimodal received empty prompt_text.")
-            return None
-
-        prompt_parts = [uploaded_file, prompt_text]
-
-        sections_info: Optional[List[Dict[str, str]]] = None
-        gemini_output: Optional[str] = None
-
+        pdf_stream = None
         try:
-            print(f"Sending multimodal prompt to Gemini model '{self.model_id}'...")
-            response = await self.model.generate_content_async(
-                prompt_parts,
-                request_options={'timeout': 300}
-            )
-            print(f'TOTAL CACHED TOKENS: {response.usage_metadata.cached_content_token_count}')
-            print("Received response from Gemini.")
-
-            try: gemini_output = response.text
-            except ValueError as ve:
-                 print(f"Gemini response potentially blocked or empty: {ve}")
-                 return None
-
-            if not gemini_output:
-                print("Gemini response text is empty.")
+            pdf_stream = storage_service.download_file_content(file_id)
+            if not pdf_stream or pdf_stream.getbuffer().nbytes == 0:
                 return None
-
-            print(f"Raw Gemini Output (first 500 chars): {gemini_output[:500]}...")
-
-            # Find the index of the first '[' and the last ']'
-            json_start_array = gemini_output.find('[')
-            json_end_array = gemini_output.rfind(']') + 1
-
-            json_array_string = None
-            if json_start_array != -1 and json_end_array != 0 and json_end_array > json_start_array:
-                 json_array_string = gemini_output[json_start_array:json_end_array]
-                 print(f"Detected JSON array pattern.")
-
-
-            if json_array_string is None:
-                 print("Could not find a valid JSON array pattern in Gemini response text.")
-                 print(f"Full Gemini Output:\n{gemini_output}")
-                 return None
-
-            json_string_cleaned = json_array_string.replace("```json", "").replace("```", "").strip()
-            if not json_string_cleaned:
-                 print("Extracted JSON string became empty after cleaning.")
-                 print(f"Attempted JSON string before cleaning:\n{json_array_string}")
-                 return None
-
-            sections_info = json.loads(json_string_cleaned)
-
-            if not isinstance(sections_info, list) or not all(
-                isinstance(item, dict) and 
-                'sectionName' in item and 
-                'pageRange' in item and 
-                'pages' in item and
-                isinstance(item['sectionName'], str) and 
-                isinstance(item['pageRange'], str) and
-                isinstance(item['pages'], list) and
-                all(
-                    isinstance(page, dict) and 
-                    'pageNumber' in page and 
-                    'pageLabel' in page and
-                    isinstance(page['pageNumber'], int) and 
-                    isinstance(page['pageLabel'], str)
-                    for page in item['pages']
-                )
-                for item in sections_info
-            ):
-                 print("Parsed JSON does not match expected structure with page metadata.")
-                 print(f"Parsed Data: {sections_info}")
-                 return None
-
-
-            print("Successfully parsed Gemini response.")
-            return sections_info
-
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON from Gemini response: {e}")
-            print(f"Attempted JSON string before cleaning:\n{json_array_string if 'json_array_string' in locals() else 'N/A - no JSON string found'}")
-            print(f"Cleaned JSON string:\n{json_string_cleaned if 'json_string_cleaned' in locals() else 'N/A - no cleaned string'}")
-            print(f"Full Gemini Output:\n{gemini_output if gemini_output else 'N/A - empty output'}")
-            return None
         except Exception as e:
-            print(f"An error occurred during Gemini analysis: {e}")
+            print(f"Error downloading PDF from storage service: {e}")
             return None
-        # Cleanup handled in the caller
-
-    # --- NEW METHOD for /extract ---
-    async def extract_structured_data_multimodal(
-        self,
-        uploaded_target_file: types.File, # The PDF to extract data FROM
-        prompt_text: str, # The text from the prompt Doc
-        output_json_format_example: Dict[str, Any]
-    ) -> Optional[Dict[str, List[Dict[str, Union[int, str, None]]]]]:
-        """
-        Sends the target PDF file reference and prompt text to Gemini for
-        structured data extraction.
-
-        Args:
-            uploaded_target_file: A genai.types.File object referencing the uploaded target PDF.
-            prompt_text: The text content from the prompt Google Doc.
-            output_json_format_example: An example of the desired output JSON structure.
-
-        Returns:
-            A dictionary matching the output_json_format_example structure, or None on failure.
-        """
-        # *** CORRECTED ENUM REFERENCE ***
-        if not uploaded_target_file or not uploaded_target_file.state == protos.File.State.ACTIVE:
-            print("extract_structured_data_multimodal received invalid uploaded_target_file object (not active).")
-            print(f"Uploaded file state: {uploaded_target_file.state}")
-            return None
-        if not prompt_text:
-            print("extract_structured_data_multimodal received empty prompt text.")
-            return None
-        if not output_json_format_example:
-             print("extract_structured_data_multimodal received empty output JSON format example.")
-             return None
-
-
-        # Construct the multimodal prompt
-        prompt_text_instructions = (
-            "Analyze the provided document (a multi-page PDF). "
-            "Use the following text from another document as instructions:\n"
-            f"--- PROMPT INSTRUCTIONS START ---\n{prompt_text.strip()}\n--- PROMPT INSTRUCTIONS END ---\n\n"
-            "Based on the instructions, extract structured data from the provided PDF. "
-            "Ensure the output follows this exact JSON format example:\n"
-            f"--- JSON FORMAT EXAMPLE START ---\n{json.dumps(output_json_format_example, indent=2)}\n--- JSON FORMAT EXAMPLE END ---\n\n"
-            "Specifically, output a JSON object where the keys are section names identified in the prompt instructions. "
-            "Each value should be a list of objects, with each object containing the keys 'page', 'title' (if available for the specific paragraph), and 'paragraph' text extracted from the PDF.\n"
-            "Report page numbers as 1-indexed integers.\n"
-            "Do not include any other text or markdown outside the final JSON object.\n"
-            "Ensure the JSON is valid and complete." # Added explicit instruction
-        )
-
-        prompt_parts = [
-            uploaded_target_file, # Include the target PDF file reference
-            prompt_text_instructions # Include text instructions
-        ]
-
-        extracted_data: Optional[Dict[str, List[Dict[str, Union[int, str, None]]]]] = None
-        gemini_output: Optional[str] = None
-
         try:
-            print(f"Sending multimodal extraction prompt to Gemini model '{self.model_id}' for file {uploaded_target_file.uri}...")
-            response = await self.model.generate_content_async(
-                prompt_parts,
-                request_options={'timeout': 300} # May need a long timeout
+            pdf_stream.seek(0)
+            uploaded_file = genai.upload_file(
+                path=pdf_stream,
+                display_name=display_name,
+                mime_type='application/pdf',
             )
-            print("Received response from Gemini.")
-
-            try: gemini_output = response.text
-            except ValueError as ve:
-                 print(f"Gemini response potentially blocked or empty: {ve}")
-                 return None
-
-            if not gemini_output:
-                print("Gemini response text is empty.")
+            max_polls = 60
+            poll_count = 0
+            while uploaded_file.state == protos.File.State.PROCESSING and poll_count < max_polls:
+                await asyncio.sleep(5)
+                uploaded_file = genai.get_file(name=uploaded_file.name)
+                poll_count += 1
+            if uploaded_file.state == protos.File.State.FAILED:
                 return None
-
-            print(f"Raw Gemini Extraction Output (first 500 chars): {gemini_output[:500]}...")
-
-            # *** CORRECTED JSON EXTRACTION LOGIC ***
-            # Find the index of the first '{' and the last '}'
-            json_start_obj = gemini_output.find('{')
-            json_end_obj = gemini_output.rfind('}') + 1 # +1 to include the closing brace
-
-            if json_start_obj == -1 or json_end_obj == 0 or json_end_obj <= json_start_obj:
-                print("Could not find a valid JSON object pattern {} in Gemini extraction response text.")
-                print(f"Full Gemini Output:\n{gemini_output}")
+            if uploaded_file.state == protos.File.State.PROCESSING:
                 return None
-
-            json_object_string = gemini_output[json_start_obj:json_end_obj]
-
-            # Clean up common markdown wrappers if present *around the extracted string*
-            json_string_cleaned = json_object_string.replace("```json", "").replace("```", "").strip()
-
-             # Add a check if cleaning resulted in an empty string
-            if not json_string_cleaned:
-                 print("Extracted JSON object string became empty after cleaning.")
-                 print(f"Attempted JSON string before cleaning:\n{json_object_string}")
-                 return None
-
-
-            # Attempt to parse the cleaned JSON string
-            # This method expects a Dict[str, List[Dict[str, Union[int, str, None]]]]
-            extracted_data = json.loads(json_string_cleaned)
-
-            # Optional: Add basic validation to check if the parsed data matches the expected high-level structure
-            # This assumes the structure is always a Dict where keys are strings and values are Lists
-            # and list items are Dicts with 'page' (int), 'paragraph' (str), and optional 'title' (str/None)
-            if not isinstance(extracted_data, dict) or not all(
-                 isinstance(key, str) and
-                 isinstance(value, list) and
-                 all(
-                      isinstance(item, dict) and
-                      isinstance(item.get('page'), int) and
-                      isinstance(item.get('paragraph'), str) and
-                      ('title' not in item or isinstance(item.get('title'), (str, type(None))))
-                      for item in value
-                 )
-                 for key, value in extracted_data.items()
-            ):
-                 print("Parsed JSON does not match expected extraction structure.")
-                 print(f"Parsed Data: {extracted_data}")
-                 # Log the specific type/key mismatch if possible for debugging
-                 return None
-
-
-            print("Successfully parsed Gemini extraction response.")
-            return extracted_data
-
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON from Gemini extraction response: {e}")
-            print(f"Attempted JSON string before cleaning:\n{json_object_string if 'json_object_string' in locals() else 'N/A - no JSON string found'}")
-            print(f"Cleaned JSON string:\n{json_string_cleaned if 'json_string_cleaned' in locals() else 'N/A - no cleaned string'}")
-            print(f"Full Gemini Output:\n{gemini_output if gemini_output else 'N/A - empty output'}")
-            return None
+            if not uploaded_file.state == protos.File.State.ACTIVE:
+                return None
+            return uploaded_file
         except Exception as e:
-            print(f"An error occurred during Gemini extraction analysis: {e}")
+            print(f"Error during PDF upload to Google AI: {e}")
             return None
-        # Cleanup handled in caller
+        finally:
+            if pdf_stream:
+                try:
+                    pdf_stream.close()
+                    del pdf_stream
+                except Exception as e:
+                    print(f"Error closing PDF stream: {e}")
 
-
-    async def combined_analyze_and_extract(
-        self,
-        uploaded_file: types.File,
+    async def analyze_pdf_content(
+        self, 
+        file: types.File, 
         analysis_prompt: str,
-        extraction_prompts: List[Any],  # List[PromptItem] from models
-        output_format_example: Optional[Dict[str, Any]] = None
-    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]:
+        max_retries: int = 3
+    ) -> Tuple[str, Optional[str]]:
         """
-        Performs section analysis and extraction using the same uploaded file.
+        Analyzes PDF content using the Gemini model with the uploaded file.
+
+        Args:
+            file: The genai.types.File object referencing the uploaded PDF.
+            analysis_prompt: The prompt to use for analysis.
+            max_retries: Maximum number of retry attempts for the analysis.
+
+        Returns:
+            A tuple containing (analysis_result, error_message). If successful, error_message is None.
+        """
+        if not file or not file.name:
+            return "ERROR_INPUT", "Invalid file object provided."
+
+        if not analysis_prompt or not analysis_prompt.strip():
+            return "ERROR_INPUT", "Empty or invalid analysis prompt provided."
+
+        retry_count = 0
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                print(f"Analyzing PDF content with model: {self.model_id}")
+                print(f"File: {file.name}")
+                print(f"Analysis prompt length: {len(analysis_prompt)} characters")
+                print(f"Attempt {retry_count + 1}/{max_retries}")
+
+                # Create the model with the file
+                model_with_file = genai.GenerativeModel(self.model_id)
+                
+                # Generate content using the model with the file
+                response = await asyncio.to_thread(
+                    model_with_file.generate_content,
+                    [analysis_prompt, file]
+                )
+
+                if response and response.text:
+                    print(f"Successfully analyzed PDF content. Response length: {len(response.text)} characters")
+                    return response.text, None
+                else:
+                    print("No analysis result generated in response")
+                    return "ERROR_NO_RESPONSE", "No analysis result was generated in the response."
+
+            except ResourceExhausted as e:
+                last_error = f"Resource exhausted: {str(e)}"
+                print(f"RESOURCE EXHAUSTED (attempt {retry_count + 1}): {e}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"Retrying in {settings.retry_cooldown_seconds} seconds...")
+                    await asyncio.sleep(settings.retry_cooldown_seconds)
+
+            except GoogleAPIError as e:
+                last_error = f"Google API error: {str(e)}"
+                print(f"GOOGLE API ERROR (attempt {retry_count + 1}): {e}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"Retrying in {settings.retry_cooldown_seconds} seconds...")
+                    await asyncio.sleep(settings.retry_cooldown_seconds)
+
+            except Exception as e:
+                last_error = f"Unexpected error during API call: {str(e)}"
+                print(f"UNEXPECTED ERROR (attempt {retry_count + 1}): Error during Gemini analysis: {e}")
+                traceback.print_exc()
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"Retrying in {settings.retry_cooldown_seconds} seconds...")
+                    await asyncio.sleep(settings.retry_cooldown_seconds)
+
+        # If we get here, all retries failed
+        print(f"All {max_retries} attempts failed. Last error: {last_error}")
+        return "ERROR_MAX_RETRIES", last_error
+
+    async def delete_file(self, file: types.File) -> bool:
+        """
+        Deletes a file from Google AI storage.
+
+        Args:
+            file: The genai.types.File object to delete.
+
+        Returns:
+            True if deletion was successful, False otherwise.
+        """
+        if not file or not file.name:
+            print("Invalid file object provided for deletion.")
+            return False
+
+        try:
+            print(f"Deleting file: {file.name}")
+            genai.delete_file(name=file.name)
+            print(f"Successfully deleted file: {file.name}")
+            return True
+
+        except Exception as e:
+            print(f"Error deleting file {file.name}: {e}")
+            return False
+
+    async def get_file_by_name(self, file_name: str) -> Optional[types.File]:
+        """
+        Get a file from Gemini AI storage by its actual file name.
+        """
+        try:
+            file = genai.get_file(name=file_name)
+            if file.state == protos.File.State.ACTIVE:
+                return file
+            return None
+        except Exception as e:
+            print(f"Error retrieving file by name: {e}")
+            return None
+
+    async def analyze_sections_multimodal(
+        self, 
+        file: types.File, 
+        analysis_prompt: str,
+        max_retries: int = 3
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Analyzes PDF content to identify sections using the Gemini model with the uploaded file.
+        Returns structured data about sections with page information.
+
+        Args:
+            file: The genai.types.File object referencing the uploaded PDF.
+            analysis_prompt: The prompt to use for section analysis.
+            max_retries: Maximum number of retry attempts for the analysis.
+
+        Returns:
+            A list of dictionaries containing section information with page metadata, or None if analysis fails.
+        """
+        if not file or not file.name:
+            print("Invalid file object provided for section analysis.")
+            return None
+
+        if not analysis_prompt or not analysis_prompt.strip():
+            print("Empty or invalid analysis prompt provided.")
+            return None
+
+        retry_count = 0
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                print(f"Analyzing PDF sections with model: {self.model_id}")
+                print(f"File: {file.name}")
+                print(f"Analysis prompt length: {len(analysis_prompt)} characters")
+                print(f"Attempt {retry_count + 1}/{max_retries}")
+
+                # Create the model with the file
+                model_with_file = genai.GenerativeModel(self.model_id)
+                
+                # Generate content using the model with the file
+                response = await asyncio.to_thread(
+                    model_with_file.generate_content,
+                    [analysis_prompt, file], generation_config={"response_mime_type": "application/json", "response_schema": list[SectionWithPages]}
+                )
+
+                if response and response.text:
+                    print(f"Successfully analyzed PDF sections. Response length: {len(response.text)} characters")
+                    
+                    # Parse the response to extract section information
+                    sections_info = self._parse_sections_response(response.text)
+                    if sections_info:
+                        print(f"Successfully parsed {len(sections_info)} sections from analysis")
+                        return sections_info
+                    else:
+                        print("Failed to parse sections from analysis response")
+                        return None
+                else:
+                    print("No analysis result generated in response")
+                    return None
+
+            except ResourceExhausted as e:
+                last_error = f"Resource exhausted: {str(e)}"
+                print(f"RESOURCE EXHAUSTED (attempt {retry_count + 1}): {e}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"Retrying in {settings.retry_cooldown_seconds} seconds...")
+                    await asyncio.sleep(settings.retry_cooldown_seconds)
+
+            except GoogleAPIError as e:
+                last_error = f"Google API error: {str(e)}"
+                print(f"GOOGLE API ERROR (attempt {retry_count + 1}): {e}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"Retrying in {settings.retry_cooldown_seconds} seconds...")
+                    await asyncio.sleep(settings.retry_cooldown_seconds)
+
+            except Exception as e:
+                last_error = f"Unexpected error during API call: {str(e)}"
+                print(f"UNEXPECTED ERROR (attempt {retry_count + 1}): Error during Gemini section analysis: {e}")
+                traceback.print_exc()
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"Retrying in {settings.retry_cooldown_seconds} seconds...")
+                    await asyncio.sleep(settings.retry_cooldown_seconds)
+
+        # If we get here, all retries failed
+        print(f"All {max_retries} attempts failed. Last error: {last_error}")
+        return None
+
+    def _parse_sections_response(self, response_text: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Parse the AI response to extract section information.
         
         Args:
-            uploaded_file: A genai.types.File object referencing the uploaded PDF.
-            analysis_prompt: Prompt for identifying document sections.
-            extraction_prompts: List of prompts for extracting data from sections.
-            output_format_example: Example JSON structure for extraction output.
-        
+            response_text: The raw text response from the AI model
+            
         Returns:
-            Tuple of (sections_info, extraction_results) or (None, None) on failure.
+            A list of dictionaries containing section information, or None if parsing fails
         """
-        if not uploaded_file or not uploaded_file.state == protos.File.State.ACTIVE:
-            print("combined_analyze_and_extract received invalid uploaded_file object (not active).")
-            return None, None
-        
-        if not analysis_prompt:
-            print("combined_analyze_and_extract received empty analysis_prompt.")
-            return None, None
-        
-        if not extraction_prompts:
-            print("combined_analyze_and_extract received empty extraction_prompts.")
-            return None, None
-        
         try:
-            # Step 1: Analyze sections
-            print("Step 1: Analyzing document sections...")
-            sections_info = await self.analyze_sections_multimodal(uploaded_file, analysis_prompt)
-            if not sections_info:
-                print("Section analysis failed.")
-                return None, None
+            # Try to parse as JSON first
+            import json
+            response_data = json.loads(response_text)
             
-            print(f"Successfully identified {len(sections_info)} sections.")
+            # Handle different possible JSON structures
+            if isinstance(response_data, list):
+                sections = response_data
+            elif isinstance(response_data, dict) and 'sections' in response_data:
+                sections = response_data['sections']
+            elif isinstance(response_data, dict) and 'data' in response_data:
+                sections = response_data['data']
+            else:
+                sections = [response_data]
             
-            # Step 2: Extract data for each section
-            print("Step 2: Extracting data from each section...")
-            extraction_results = []
+            # Validate and normalize section structure
+            normalized_sections = []
+            for section in sections:
+                if isinstance(section, dict):
+                    normalized_section = {
+                        'sectionName': section.get('sectionName', section.get('name', 'Unknown Section')),
+                        'pageRange': section.get('pageRange', section.get('page_range', '')),
+                        'pages': []
+                    }
+                    
+                    # Handle pages array
+                    pages = section.get('pages', [])
+                    if isinstance(pages, list):
+                        for page in pages:
+                            if isinstance(page, dict):
+                                page_info = {
+                                    'pageNumber': page.get('pageNumber', page.get('page_number', 0)),
+                                    'pageLabel': page.get('pageLabel', page.get('page_label', str(page.get('pageNumber', page.get('page_number', 0)))))
+                                }
+                                normalized_section['pages'].append(page_info)
+                    
+                    normalized_sections.append(normalized_section)
             
-            for section in sections_info:
-                section_name = section['sectionName']
-                page_range = section['pageRange']
-                pages = section.get('pages', [])
-                
-                print(f"Extracting data from section '{section_name}' (pages {page_range})...")
-                
-                # Use the first extraction prompt for now (can be enhanced to handle multiple prompts)
-                extraction_prompt = extraction_prompts[0]
-                
-                # Create section-specific extraction prompt
-                section_extraction_prompt = f"""
-                Focus on the section "{section_name}" (pages {page_range}) of the document.
-                
-                {extraction_prompt.prompt_template}
-                
-                Extract data specifically from this section and return it in the specified format.
-                """
-                
-                # Add output format example if provided
-                if output_format_example:
-                    section_extraction_prompt += f"\n\nExpected output format:\n{json.dumps(output_format_example, indent=2)}"
-                
-                # Perform extraction for this section
-                section_data = await self.extract_structured_data_multimodal(
-                    uploaded_file, 
-                    section_extraction_prompt,
-                    output_format_example or {}
-                )
-                
-                if section_data:
-                    extraction_results.append({
-                        'section_name': section_name,
-                        'page_range': page_range,
-                        'extracted_data': section_data
-                    })
-                    print(f"Successfully extracted data from section '{section_name}'.")
-                else:
-                    print(f"Failed to extract data from section '{section_name}'.")
+            return normalized_sections if normalized_sections else None
             
-            print(f"Completed extraction for {len(extraction_results)} sections.")
-            return sections_info, extraction_results
+        except json.JSONDecodeError:
+            # If JSON parsing fails, try to extract information using regex patterns
+            print("JSON parsing failed, attempting regex-based extraction")
+            return self._extract_sections_with_regex(response_text)
+        except Exception as e:
+            print(f"Error parsing sections response: {e}")
+            return None
+
+    def _extract_sections_with_regex(self, response_text: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fallback method to extract section information using regex patterns.
+        
+        Args:
+            response_text: The raw text response from the AI model
+            
+        Returns:
+            A list of dictionaries containing section information, or None if extraction fails
+        """
+        try:
+            sections = []
+            
+            # Look for patterns like "Section: [name] (Pages: [range])"
+            section_pattern = r'(?:Section|Chapter|Part)\s*[:\-]?\s*([^\(\)\n]+?)\s*(?:\(Pages?\s*[:\-]?\s*([^\)\n]+)\))?'
+            matches = re.findall(section_pattern, response_text, re.IGNORECASE)
+            
+            for match in matches:
+                section_name = match[0].strip()
+                page_range = match[1].strip() if match[1] else ""
+                
+                # Try to extract page numbers from the range
+                pages = []
+                if page_range:
+                    # Look for patterns like "1-5" or "1, 2, 3" or "1-3, 5"
+                    page_numbers = re.findall(r'\d+', page_range)
+                    for i, page_num in enumerate(page_numbers):
+                        pages.append({
+                            'pageNumber': int(page_num),
+                            'pageLabel': page_num
+                        })
+                
+                sections.append({
+                    'sectionName': section_name,
+                    'pageRange': page_range,
+                    'pages': pages
+                })
+            
+            return sections if sections else None
             
         except Exception as e:
-            print(f"Error in combined_analyze_and_extract: {e}")
-            traceback.print_exc()
-            return None, None
+            print(f"Error in regex-based section extraction: {e}")
+            return None
 
-
-    def delete_uploaded_file(self, file_name: str):
-        """Deletes an uploaded file from Google AI storage. Uses configured API key."""
-        try:
-            # Correct parameter name as per source code
-            genai.delete_file(name=file_name) # <-- CORRECTED: Use 'name' parameter
-            print(f"Successfully deleted uploaded file: {file_name}")
-        except Exception as e:
-            print(f"Error deleting uploaded file {file_name}: {e}")
+    async def get_file_matching_summary(self, genai_file_name: str = None) -> Dict[str, Any]:
+        summary = {
+            "matching_strategy": "gemini_file_name_only",
+            "display_name_matching_disabled": True
+        }
+        if genai_file_name:
+            summary["target_genai_file_name"] = genai_file_name
+            try:
+                file = await self.get_file_by_name(genai_file_name)
+                summary["file_exists"] = file is not None
+                summary["file_active"] = file.state == protos.File.State.ACTIVE if file else False
+                summary["file_state"] = file.state.name if file and hasattr(file.state, 'name') else str(file.state) if file else None
+            except Exception as e:
+                summary["file_check_error"] = str(e)
+        else:
+            try:
+                files = list(genai.list_files())
+                summary["total_files_in_storage"] = len(files)
+                summary["active_files_in_storage"] = [f.name for f in files if f.state == protos.File.State.ACTIVE]
+            except Exception as e:
+                summary["storage_check_error"] = str(e)
+        return summary

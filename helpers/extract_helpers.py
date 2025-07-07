@@ -178,8 +178,6 @@ async def process_single_extract_task(
 
     # Pass task_id to ExtractionContext if it's part of its model definition
     extraction_ctx = ExtractionContext(target_drive_file_id=target_file_id) 
-    
-    pdf_stream: Optional[io.BytesIO] = None
 
     try:
         target_file_info = drive_service.get_file_info(target_file_id)
@@ -188,13 +186,25 @@ async def process_single_extract_task(
         
         extraction_ctx.target_drive_file_name = target_file_info.get('name', target_file_id)
 
-        pdf_stream = drive_service.download_file_content(target_file_id)
-        if pdf_stream is None: 
-            if pdf_stream is None:
-                return BatchExtractTaskResult(success=False, error_info=ExtractTaskResponseItemError(task_id=task_id, target_drive_file_id=target_file_id, error="Failed to download target file content."))
+        # Check file size before processing
+        file_size = target_file_info.get('size', 0)
+        if file_size > 50 * 1024 * 1024:  # 50MB limit
+            return BatchExtractTaskResult(
+                success=False, 
+                error_info=ExtractTaskResponseItemError(
+                    task_id=task_id, 
+                    target_drive_file_id=target_file_id, 
+                    error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
+                )
+            )
 
+        # Use the new method that only downloads if needed
         target_gfile_display_name = f"extract_target_{os.path.splitext(extraction_ctx.target_drive_file_name or 'unknown')[0]}_{task_id[:8]}.pdf"
-        extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.upload_pdf_for_analysis(pdf_stream, target_gfile_display_name)
+        extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.upload_pdf_for_analysis_by_file_id(
+            target_file_id,
+            target_gfile_display_name,
+            drive_service
+        )
         
         if extraction_ctx.uploaded_target_gfile is None:
             return BatchExtractTaskResult(success=False, error_info=ExtractTaskResponseItemError(task_id=task_id, target_drive_file_id=target_file_id, error="Failed to upload target document for AI extraction."))
@@ -291,13 +301,15 @@ async def process_single_extract_task(
 
 
         print(f"Finished processing prompts for Extract Task ID: {task_id}")
+        extraction_results = extraction_ctx.generated_outputs
         return BatchExtractTaskResult(
-            success=True, 
+            success=True,
             result=ExtractTaskResponseItemSuccess(
-                task_id=task_id, # Ensure task_id is passed back
+                task_id=task_id,
                 target_drive_file_id=target_file_id,
                 target_drive_file_name=extraction_ctx.target_drive_file_name,
-                extraction_results=extraction_ctx.generated_outputs
+                extraction_results=extraction_results,
+                genai_file_name=extraction_ctx.uploaded_target_gfile.name
             )
         )
 
@@ -314,9 +326,6 @@ async def process_single_extract_task(
             )
         )
     finally:
-        if pdf_stream: pdf_stream.close()
-        if extraction_ctx.uploaded_target_gfile and hasattr(extraction_ctx.uploaded_target_gfile, 'name') and gemini_analysis_service:
-            try:
-                gemini_analysis_service.delete_uploaded_file(extraction_ctx.uploaded_target_gfile.name)
-            except Exception as cleanup_ex:
-                print(f"Error during cleanup of uploaded file {extraction_ctx.uploaded_target_gfile.name}: {cleanup_ex}")
+        # Note: File cleanup is not performed here as files are needed for subsequent processing
+        # Gemini AI automatically cleans up unused files after a few hours
+        pass
