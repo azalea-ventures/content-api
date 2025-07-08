@@ -142,3 +142,7 @@ Thumbs.db
 service_acct.json
 sample.json
 temp.py
+
+example_**
+test_**
+**_test.json

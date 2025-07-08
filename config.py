@@ -22,5 +22,10 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: int = 300  # Timeout for Gemini API calls
     file_upload_poll_timeout_seconds: int = 300  # Timeout for file upload polling
     worker_timeout_seconds: int = 600  # Gunicorn worker timeout
+    
+    # Concurrent processing configuration
+    max_concurrent_requests: int = 10  # Maximum concurrent API calls
+    concurrent_retry_cooldown_seconds: int = 30  # Shorter cooldown for concurrent mode
+    enable_concurrent_processing: bool = True  # Enable concurrent processing by default
 
 settings = Settings()

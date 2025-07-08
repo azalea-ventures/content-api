@@ -119,6 +119,93 @@ async def _execute_section_extraction_api_call(
         return False
 
 
+async def _execute_section_extraction_api_call_concurrent(
+    gemini_service: GenerativeAnalysisService,
+    extraction_ctx: RefactoredExtractionContext,
+    section_name: str,
+    page_range: str,
+    prompt: SectionExtractPrompt,
+    api_attempt_count: int
+) -> Dict[str, Any]:
+    """Execute API call for a single prompt on a section - concurrent version"""
+    target_id_log = extraction_ctx.target_drive_file_id
+    print(f"API Call (Concurrent): Section '{section_name}', Prompt '{prompt.prompt_name}', API Attempt {api_attempt_count + 1}.")
+
+    # Get the Gemini file for this extraction
+    genai_file = extraction_ctx.genai_file
+    if not genai_file:
+        print(f"Error (Concurrent): Gemini File not found for file ID '{target_id_log}', Prompt '{prompt.prompt_name}'.")
+        return {
+            "success": False,
+            "section_name": section_name,
+            "prompt": prompt,
+            "error": "Internal error: Gemini File was not available for multimodal prompt.",
+            "rate_limit_hit": False
+        }
+
+    # Add section context, page range, and section number to the prompt
+    section_context = f"Focus on the section '{section_name}' when extracting information."
+    page_range_context = f"This extraction applies to pages: {page_range}"
+    
+    # Extract section number from section name if it contains a number
+    section_number = ""
+    section_number_match = re.search(r'(\d+)', section_name)
+    if section_number_match:
+        section_number = f"Section number: {section_number_match.group(1)}. "
+    
+    final_instructions = f"{section_context}\n{page_range_context}\n{section_number}\n\n{prompt.prompt_text}"
+    final_instructions += f"\n\nEnsure the output is ONLY the requested information for this specific section (pages {page_range})."
+
+    multimodal_prompt_parts = [
+        genai_file,
+        final_instructions
+    ]
+
+    # For multimodal prompts (file + text), use generate_content_async directly
+    try:
+        response = await gemini_service.model.generate_content_async(multimodal_prompt_parts)
+        if response and response.text:
+            api_output_data = response.text
+            status = "SUCCESS"
+        else:
+            api_output_data = "No response text received"
+            status = "ERROR_EMPTY"
+    except Exception as e:
+        api_output_data = str(e)
+        status = "ERROR_API"
+
+    if status == "SUCCESS":
+        prompt.result = api_output_data
+        print(f"SUCCESS (Concurrent): Section '{section_name}', Prompt '{prompt.prompt_name}'.")
+        return {
+            "success": True,
+            "section_name": section_name,
+            "prompt": prompt,
+            "rate_limit_hit": False
+        }
+    elif status == "RATE_LIMIT" or status == "ERROR_API":
+        print(f"{status} (Concurrent): Section '{section_name}', Prompt '{prompt.prompt_name}'. Error: {str(api_output_data)[:100]}")
+        return {
+            "success": False,
+            "section_name": section_name,
+            "prompt": prompt,
+            "error": str(api_output_data),
+            "rate_limit_hit": status == "RATE_LIMIT",
+            "api_attempt_count": api_attempt_count
+        }
+    else:
+        err_msg = f"Permanent Error (Concurrent): Section '{section_name}', Prompt '{prompt.prompt_name}': [{status}] {str(api_output_data)[:100]}"
+        print(err_msg)
+        prompt.result = f"Permanent error: {str(api_output_data)[:100]}"
+        return {
+            "success": False,
+            "section_name": section_name,
+            "prompt": prompt,
+            "error": str(api_output_data),
+            "rate_limit_hit": False
+        }
+
+
 async def _get_or_upload_genai_file(
     extraction_ctx: RefactoredExtractionContext,
     storage_service: StorageService,
@@ -492,4 +579,148 @@ async def process_refactored_extract_request(
             success=False,
             result=None,
             error=f"An internal server error occurred during extraction: {str(ex)}"
+        ) 
+
+
+async def process_extract_request_concurrent(
+    request: ExtractRequest,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService
+) -> ExtractResponse:
+    """Process the extract request using concurrent API calls"""
+    
+    target_file_id = request.originalDriveFileId
+    print(f"Processing Concurrent Extract Request for file ID: {target_file_id}")
+
+    extraction_ctx = RefactoredExtractionContext(target_drive_file_id=target_file_id)
+    extraction_ctx.target_drive_file_name = request.originalDriveFileName
+
+    try:
+        # Get or upload the Gemini AI file
+        if not await _get_or_upload_genai_file(
+            extraction_ctx,
+            storage_service,
+            gemini_analysis_service,
+            request.genai_file_name
+        ):
+            return ExtractResponse(
+                success=False,
+                originalDriveFileId=target_file_id,
+                originalDriveFileName=request.originalDriveFileName,
+                originalDriveParentFolderId=request.originalDriveParentFolderId,
+                sections=request.sections,
+                prompt=request.prompt,
+                error="Failed to get or upload file to Gemini AI",
+                genai_file_name=request.genai_file_name
+            )
+
+        # Create tasks for all sections
+        tasks = []
+        for section in request.sections:
+            # Create a copy of the prompt for this section to avoid modifying the original
+            section_prompt = SectionExtractPrompt(
+                prompt_name=request.prompt.prompt_name,
+                prompt_text=request.prompt.prompt_text,
+                result=None
+            )
+            
+            # Add the prompt to the section's prompts array
+            if section.prompts is None:
+                section.prompts = []
+            if section_prompt not in section.prompts:
+                section.prompts.append(section_prompt)
+            
+            # Create task for this section
+            task = _execute_section_extraction_api_call_concurrent(
+                gemini_analysis_service,
+                extraction_ctx,
+                section.sectionName,
+                section.pageRange,
+                section_prompt,
+                0  # Initial attempt
+            )
+            tasks.append(task)
+
+        # Execute all tasks concurrently
+        print(f"Executing {len(tasks)} concurrent API calls...")
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results and handle retries for failed requests
+        failed_tasks = []
+        rate_limit_hit = False
+        
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                # Handle unexpected exceptions
+                section = request.sections[i]
+                print(f"Exception in concurrent call for section '{section.sectionName}': {result}")
+                failed_tasks.append({
+                    "section_name": section.sectionName,
+                    "page_range": section.pageRange,
+                    "prompt": section.prompts[i] if section.prompts else None,
+                    "error": str(result),
+                    "api_attempt_count": 0
+                })
+            elif not result["success"]:
+                if result["rate_limit_hit"]:
+                    rate_limit_hit = True
+                    failed_tasks.append({
+                        "section_name": result["section_name"],
+                        "page_range": request.sections[i].pageRange,
+                        "prompt": result["prompt"],
+                        "api_attempt_count": result.get("api_attempt_count", 0)
+                    })
+                else:
+                    # Permanent error, don't retry
+                    print(f"Permanent error for section '{result['section_name']}': {result['error']}")
+
+        # Handle retries if needed
+        if failed_tasks and not rate_limit_hit:
+            print(f"Retrying {len(failed_tasks)} failed requests...")
+            retry_tasks = []
+            for failed_task in failed_tasks:
+                if failed_task["api_attempt_count"] < settings.max_api_retries:
+                    retry_task = _execute_section_extraction_api_call_concurrent(
+                        gemini_analysis_service,
+                        extraction_ctx,
+                        failed_task["section_name"],
+                        failed_task["page_range"],
+                        failed_task["prompt"],
+                        failed_task["api_attempt_count"] + 1
+                    )
+                    retry_tasks.append(retry_task)
+            
+            if retry_tasks:
+                retry_results = await asyncio.gather(*retry_tasks, return_exceptions=True)
+                # Process retry results (similar to above)
+                for i, retry_result in enumerate(retry_results):
+                    if isinstance(retry_result, Exception):
+                        print(f"Exception in retry call: {retry_result}")
+                    elif not retry_result["success"]:
+                        print(f"Retry failed for section '{retry_result['section_name']}': {retry_result['error']}")
+
+        # Build the response
+        print(f"Finished processing concurrent extract for file ID: {target_file_id}")
+        return ExtractResponse(
+            success=True,
+            originalDriveFileId=target_file_id,
+            originalDriveFileName=request.originalDriveFileName,
+            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            sections=request.sections,
+            prompt=request.prompt,
+            genai_file_name=extraction_ctx.genai_file_name
+        )
+
+    except Exception as ex:
+        print(f"Unhandled critical error processing concurrent extract for file {target_file_id}: {ex}")
+        traceback.print_exc()
+        return ExtractResponse(
+            success=False,
+            originalDriveFileId=target_file_id,
+            originalDriveFileName=request.originalDriveFileName,
+            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            sections=request.sections,
+            prompt=request.prompt,
+            error=f"An internal server error occurred during extraction: {str(ex)}",
+            genai_file_name=request.genai_file_name
         ) 

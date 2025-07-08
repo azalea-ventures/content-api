@@ -157,6 +157,10 @@ The API exposes the following endpoints:
         "genai_file_name": "optional_existing_gemini_file_name"
     }
     ```
+*   **Concurrent Processing Configuration:**
+    - **`enable_concurrent_processing`**: Global setting in `config.py` to enable/disable concurrent processing (default: `true`)
+    - **`max_concurrent_requests`**: Maximum number of concurrent API calls (default: 10)
+    - **`concurrent_retry_cooldown_seconds`**: Cooldown period for concurrent retries (default: 30s)
 *   **Response (Success - 200 OK):** `ExtractResponse` object with prompts as a sibling property. See [`models.py`](./models.py) for details.
     ```json
     {
@@ -195,6 +199,12 @@ The API exposes the following endpoints:
     - **Section Context**: Automatically adds section name and page range to prompts
     - **File Reuse**: Optionally reuse existing Gemini AI files to avoid re-uploading
     - **Rate Limiting**: Includes comprehensive retry logic and rate limiting
+    - **Concurrent Processing**: Process multiple sections simultaneously for improved performance
+*   **Performance Benefits:**
+    - **Faster Processing**: All sections processed simultaneously instead of sequentially
+    - **Better Resource Utilization**: Makes full use of available API capacity
+    - **Reduced Total Time**: Especially beneficial for documents with many sections
+    - **Smart Retry Logic**: Handles rate limiting and retries efficiently in concurrent mode
 
 
 

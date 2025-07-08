@@ -125,7 +125,15 @@ async def extract_endpoint(request: ExtractRequest):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
 
     print(f"Extract request for file: {request.originalDriveFileId}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
-    result = await process_extract_request(request, storage_service, gemini_analysis_service)
+    
+    # Use concurrent processing by default if enabled globally
+    if settings.enable_concurrent_processing:
+        from helpers.refactored_extract_helpers import process_extract_request_concurrent
+        result = await process_extract_request_concurrent(request, storage_service, gemini_analysis_service)
+    else:
+        from helpers.refactored_extract_helpers import process_extract_request
+        result = await process_extract_request(request, storage_service, gemini_analysis_service)
+    
     print(f"Finished extract for file: {request.originalDriveFileId}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     return result
 
