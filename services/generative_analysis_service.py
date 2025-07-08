@@ -16,7 +16,6 @@ from google.api_core.exceptions import ResourceExhausted, GoogleAPIError # For s
 from config import settings
 
 # Import StorageService for type hinting
-from models import SectionWithPages
 from services.google_drive_service import StorageService
 
 # No longer need Credentials here, genai is configured with API key
@@ -400,7 +399,34 @@ class GenerativeAnalysisService:
                 model_with_file = genai.GenerativeModel(self.model_id)
                 
                 # Generate content using the model with the file
-                response = await model_with_file.generate_content_async(contents=[analysis_prompt, file], generation_config={"response_mime_type": "application/json", "response_schema": list[SectionWithPages]})
+                response = await model_with_file.generate_content_async(
+                    contents=[analysis_prompt, file], 
+                    generation_config={
+                        "response_mime_type": "application/json", 
+                        "response_schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "sectionName": {"type": "string"},
+                                    "pageRange": {"type": "string"},
+                                    "pages": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "pageNumber": {"type": "integer"},
+                                                "pageLabel": {"type": "string"}
+                                            },
+                                            "required": ["pageNumber", "pageLabel"]
+                                        }
+                                    }
+                                },
+                                "required": ["sectionName", "pageRange", "pages"]
+                            }
+                        }
+                    }
+                )
 
                 if response and response.text:
                     print(f"Successfully analyzed PDF sections. Response length: {len(response.text)} characters")
