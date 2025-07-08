@@ -91,21 +91,12 @@ class SectionInfo(BaseModel):
     sectionName: str
     pageRange: str
 
-# --- NEW PAGE METADATA MODELS ---
-class PageInfo(BaseModel):
-    """Represents metadata for a single page"""
-    pageNumber: int
-    pageLabel: str
-
+# --- SIMPLIFIED SECTION MODELS (Removed individual page objects) ---
 class SectionWithPages(BaseModel):
-    """Represents a section with its page range and detailed page information"""
+    """Represents a section with its page range (simplified without individual page objects)"""
     pageRange: str
     sectionName: str
-    pages: List[PageInfo]
     prompts: Optional[List["SectionExtractPrompt"]] = None
-    source_prompt: Optional["SectionExtractPrompt"] = None  # Track the most recent applied prompt
-
-
 
 # --- NEW REFACTORED EXTRACT MODELS ---
 
@@ -116,14 +107,13 @@ class SectionExtractPrompt(BaseModel):
     result: Optional[str] = None  # Store the result directly on the prompt
 
 class SectionWithPrompts(BaseModel):
-    """A section with prompts for extraction (matches the attached format)"""
+    """A section with prompts for extraction (simplified without individual page objects)"""
     prompts: Optional[List[SectionExtractPrompt]] = Field(default_factory=list)
     pageRange: str
     sectionName: str
-    pages: List[PageInfo]
 
 class AnalyzeResultWithPrompts(BaseModel):
-    """The result structure from analyze with prompts added (matches the attached format)"""
+    """The result structure from analyze with prompts added (simplified without individual page objects)"""
     originalDriveFileId: str
     originalDriveFileName: str
     originalDriveParentFolderId: str
@@ -135,7 +125,7 @@ class ExtractRequest(BaseModel):
     originalDriveParentFolderId: Optional[str] = None
     sections: List[SectionWithPages]  # Multiple sections
     genai_file_name: Optional[str] = None
-    prompts: List[SectionExtractPrompt]  # Sibling array of prompts
+    prompt: SectionExtractPrompt  # Single prompt to apply to all sections
 
 class RefactoredExtractResponse(BaseModel):
     """Response from the refactored extract endpoint (matches the request format)"""
@@ -145,13 +135,13 @@ class RefactoredExtractResponse(BaseModel):
     genai_file_name: Optional[str] = None
 
 class ExtractResponse(BaseModel):
-    """Response from the updated extract endpoint with prompts as sibling of sections"""
+    """Response from the updated extract endpoint with prompt as sibling of sections"""
     success: bool
     originalDriveFileId: str
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
     sections: List[SectionWithPages]  # Multiple processed sections
-    prompts: List[SectionExtractPrompt]  # Sibling array of prompts with results
+    prompt: SectionExtractPrompt  # Single prompt with results
     error: Optional[str] = None
     genai_file_name: Optional[str] = None
 
@@ -160,6 +150,12 @@ class AnalyzeRequestItem(BaseModel):
     file_id: str
     prompt_text: str
     genai_file_name: Optional[str] = None
+
+class SplitRequest(BaseModel):
+    originalDriveFileId: str
+    originalDriveFileName: Optional[str] = None
+    originalDriveParentFolderId: Optional[str] = None
+    sections: List[SectionInfo]
 
 class AnalyzeResponseItemError(BaseModel):
     originalDriveFileId: str
@@ -170,7 +166,7 @@ class AnalyzeResponseItemSuccess(BaseModel):
     originalDriveFileId: str
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
-    sections: List[SectionWithPages]  # Updated to include page metadata
+    sections: List[SectionWithPages]  # Updated to use simplified section model
     genai_file_name: Optional[str] = None
 
 class BatchAnalyzeItemResult(BaseModel):
@@ -198,12 +194,6 @@ class BatchSplitItemResult(BaseModel):
     success: bool
     result: Optional[SplitResponseItemSuccess] = None
     error_info: Optional[SplitResponseItemError] = None
-
-class SplitRequest(BaseModel):
-    originalDriveFileId: str
-    originalDriveFileName: Optional[str] = None
-    originalDriveParentFolderId: Optional[str] = None
-    sections: List[SectionInfo]
 
 
 

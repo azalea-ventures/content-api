@@ -28,7 +28,7 @@ from models import (
     BatchSplitItemResult, UploadedFileInfo, 
     ExtractedDataDict,
     # New refactored extract models
-    RefactoredExtractResponse, SectionExtractPrompt, PageInfo, SectionWithPrompts, AnalyzeResultWithPrompts,
+    RefactoredExtractResponse, SectionExtractPrompt, SectionWithPrompts, AnalyzeResultWithPrompts,
     # New extract models for n8n workflow
     ExtractRequest, ExtractResponse
 )
@@ -124,9 +124,9 @@ async def extract_endpoint(request: ExtractRequest):
     if not request:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
 
-    print(f"Extract request for file: {request.originalDriveFileId}, sections: {len(request.sections)}")
+    print(f"Extract request for file: {request.originalDriveFileId}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     result = await process_extract_request(request, storage_service, gemini_analysis_service)
-    print(f"Finished extract for file: {request.originalDriveFileId}, sections: {len(request.sections)}")
+    print(f"Finished extract for file: {request.originalDriveFileId}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     return result
 
 @app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)

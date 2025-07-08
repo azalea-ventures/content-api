@@ -409,20 +409,9 @@ class GenerativeAnalysisService:
                                 "type": "object",
                                 "properties": {
                                     "sectionName": {"type": "string"},
-                                    "pageRange": {"type": "string"},
-                                    "pages": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "pageNumber": {"type": "integer"},
-                                                "pageLabel": {"type": "string"}
-                                            },
-                                            "required": ["pageNumber", "pageLabel"]
-                                        }
-                                    }
+                                    "pageRange": {"type": "string"}
                                 },
-                                "required": ["sectionName", "pageRange", "pages"]
+                                "required": ["sectionName", "pageRange"]
                             }
                         }
                     }
@@ -503,20 +492,8 @@ class GenerativeAnalysisService:
                 if isinstance(section, dict):
                     normalized_section = {
                         'sectionName': section.get('sectionName', section.get('name', 'Unknown Section')),
-                        'pageRange': section.get('pageRange', section.get('page_range', '')),
-                        'pages': []
+                        'pageRange': section.get('pageRange', section.get('page_range', ''))
                     }
-                    
-                    # Handle pages array
-                    pages = section.get('pages', [])
-                    if isinstance(pages, list):
-                        for page in pages:
-                            if isinstance(page, dict):
-                                page_info = {
-                                    'pageNumber': page.get('pageNumber', page.get('page_number', 0)),
-                                    'pageLabel': page.get('pageLabel', page.get('page_label', str(page.get('pageNumber', page.get('page_number', 0)))))
-                                }
-                                normalized_section['pages'].append(page_info)
                     
                     normalized_sections.append(normalized_section)
             
@@ -551,21 +528,9 @@ class GenerativeAnalysisService:
                 section_name = match[0].strip()
                 page_range = match[1].strip() if match[1] else ""
                 
-                # Try to extract page numbers from the range
-                pages = []
-                if page_range:
-                    # Look for patterns like "1-5" or "1, 2, 3" or "1-3, 5"
-                    page_numbers = re.findall(r'\d+', page_range)
-                    for i, page_num in enumerate(page_numbers):
-                        pages.append({
-                            'pageNumber': int(page_num),
-                            'pageLabel': page_num
-                        })
-                
                 sections.append({
                     'sectionName': section_name,
-                    'pageRange': page_range,
-                    'pages': pages
+                    'pageRange': page_range
                 })
             
             return sections if sections else None

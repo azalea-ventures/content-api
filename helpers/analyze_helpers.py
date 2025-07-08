@@ -110,17 +110,9 @@ async def process_single_analyze_request(
         # Convert the dictionary data to SectionWithPages objects
         sections_with_pages = []
         for section_dict in sections_info_dicts:
-            pages = []
-            for page_dict in section_dict.get('pages', []):
-                pages.append({
-                    'pageNumber': page_dict['pageNumber'],
-                    'pageLabel': page_dict['pageLabel']
-                })
-            
             sections_with_pages.append(SectionWithPages(
                 pageRange=section_dict['pageRange'],
-                sectionName=section_dict['sectionName'],
-                pages=pages
+                sectionName=section_dict['sectionName']
             ))
         
         return BatchAnalyzeItemResult(
