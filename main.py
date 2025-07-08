@@ -124,9 +124,9 @@ async def extract_endpoint(request: ExtractRequest):
     if not request:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
 
-    print(f"Extract request for file: {request.originalDriveFileId}, section: {request.section.sectionName}")
+    print(f"Extract request for file: {request.originalDriveFileId}, sections: {len(request.sections)}")
     result = await process_extract_request(request, storage_service, gemini_analysis_service)
-    print(f"Finished extract for file: {request.originalDriveFileId}, section: {request.section.sectionName}")
+    print(f"Finished extract for file: {request.originalDriveFileId}, sections: {len(request.sections)}")
     return result
 
 @app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)

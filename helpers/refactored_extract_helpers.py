@@ -314,12 +314,10 @@ async def process_extract_request(
     storage_service: StorageService,
     gemini_analysis_service: GenerativeAnalysisService
 ) -> ExtractResponse:
-    """Process the extract request with a single section and sibling prompts array"""
+    """Process the extract request with multiple sections and sibling prompts array"""
     
     target_file_id = request.originalDriveFileId
-    section_name = request.section.sectionName
-    page_range = request.section.pageRange
-    print(f"Processing Extract Request for file ID: {target_file_id}, section: {section_name}")
+    print(f"Processing Extract Request for file ID: {target_file_id}")
 
     extraction_ctx = RefactoredExtractionContext(target_drive_file_id=target_file_id)
     extraction_ctx.target_drive_file_name = request.originalDriveFileName
@@ -333,7 +331,7 @@ async def process_extract_request(
                     originalDriveFileId=target_file_id,
                     originalDriveFileName=request.originalDriveFileName,
                     originalDriveParentFolderId=request.originalDriveParentFolderId,
-                    section=request.section,
+                    sections=request.sections,
                     prompts=request.prompts,
                     error=f"Failed to retrieve existing Gemini file: {request.genai_file_name}",
                     genai_file_name=None
@@ -350,30 +348,32 @@ async def process_extract_request(
                     originalDriveFileId=target_file_id,
                     originalDriveFileName=request.originalDriveFileName,
                     originalDriveParentFolderId=request.originalDriveParentFolderId,
-                    section=request.section,
+                    sections=request.sections,
                     prompts=request.prompts,
                     error="Failed to upload target file to Gemini AI",
                     genai_file_name=None
                 )
 
-        # Process each prompt for the section
+        # Process each prompt against each section
         api_retry_queue = deque()
         data_dependency_deferred_queue = deque()
 
-        # Queue all prompts for processing
-        for prompt in request.prompts:
-            data_dependency_deferred_queue.append({
-                "type": "extract_data_dependency",
-                "section_name": section_name,
-                "page_range": page_range,
-                "prompt": prompt,
-                "dd_attempt_count": 0
-            })
+        # Queue all section-prompt combinations for processing
+        for section in request.sections:
+            for prompt in request.prompts:
+                data_dependency_deferred_queue.append({
+                    "type": "extract_data_dependency",
+                    "section_name": section.sectionName,
+                    "page_range": section.pageRange,
+                    "prompt": prompt,
+                    "section": section,
+                    "dd_attempt_count": 0
+                })
 
         last_rate_limit_time = None
         processing_cycles = 0
-        total_prompts = len(request.prompts)
-        max_cycles = total_prompts * (settings.max_api_retries + settings.max_data_dependency_retries + 2)
+        total_combinations = len(request.sections) * len(request.prompts)
+        max_cycles = total_combinations * (settings.max_api_retries + settings.max_data_dependency_retries + 2)
 
         while data_dependency_deferred_queue or api_retry_queue:
             processing_cycles += 1
@@ -407,6 +407,7 @@ async def process_extract_request(
                 dd_task_details = data_dependency_deferred_queue.popleft()
                 if dd_task_details.get("type") == "extract_data_dependency":
                     prompt = dd_task_details["prompt"]
+                    section = dd_task_details["section"]
                     dd_attempts = dd_task_details["dd_attempt_count"]
 
                     # Check if we're in rate limit cooldown
@@ -420,12 +421,16 @@ async def process_extract_request(
                     api_call_requeued = await _execute_section_extraction_api_call(
                         gemini_analysis_service,
                         extraction_ctx,
-                        section_name,
-                        page_range,
+                        section.sectionName,
+                        section.pageRange,
                         prompt,
                         0,
                         api_retry_queue
                     )
+                    
+                    # Set the prompt as the section's source_prompt
+                    section.source_prompt = prompt
+                    
                     if api_call_requeued:
                         last_rate_limit_time = time.monotonic()
 
@@ -447,26 +452,26 @@ async def process_extract_request(
                     task["prompt"].result = "Processing cycle limit reached while waiting for data dependency."
 
         # Build the response
-        print(f"Finished processing extract for file ID: {target_file_id}, section: {section_name}")
+        print(f"Finished processing extract for file ID: {target_file_id}")
         return ExtractResponse(
             success=True,
             originalDriveFileId=target_file_id,
             originalDriveFileName=request.originalDriveFileName,
             originalDriveParentFolderId=request.originalDriveParentFolderId,
-            section=request.section,
+            sections=request.sections,
             prompts=request.prompts,
             genai_file_name=extraction_ctx.uploaded_target_gfile.name
         )
 
     except Exception as ex:
-        print(f"Unhandled critical error processing extract for file {target_file_id}, section {section_name}: {ex}")
+        print(f"Unhandled critical error processing extract for file {target_file_id}: {ex}")
         traceback.print_exc()
         return ExtractResponse(
             success=False,
             originalDriveFileId=target_file_id,
             originalDriveFileName=request.originalDriveFileName,
             originalDriveParentFolderId=request.originalDriveParentFolderId,
-            section=request.section,
+            sections=request.sections,
             prompts=request.prompts,
             error=f"An internal server error occurred during extraction: {str(ex)}",
             genai_file_name=None

@@ -103,6 +103,7 @@ class SectionWithPages(BaseModel):
     sectionName: str
     pages: List[PageInfo]
     prompts: Optional[List["SectionExtractPrompt"]] = None
+    source_prompt: Optional["SectionExtractPrompt"] = None  # Track the most recent applied prompt
 
 
 
@@ -116,7 +117,7 @@ class SectionExtractPrompt(BaseModel):
 
 class SectionWithPrompts(BaseModel):
     """A section with prompts for extraction (matches the attached format)"""
-    prompts: List[SectionExtractPrompt]
+    prompts: Optional[List[SectionExtractPrompt]] = Field(default_factory=list)
     pageRange: str
     sectionName: str
     pages: List[PageInfo]
@@ -132,7 +133,7 @@ class ExtractRequest(BaseModel):
     originalDriveFileId: str
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
-    section: SectionWithPages  # Single section without prompts
+    sections: List[SectionWithPages]  # Multiple sections
     genai_file_name: Optional[str] = None
     prompts: List[SectionExtractPrompt]  # Sibling array of prompts
 
@@ -149,7 +150,7 @@ class ExtractResponse(BaseModel):
     originalDriveFileId: str
     originalDriveFileName: Optional[str] = None
     originalDriveParentFolderId: Optional[str] = None
-    section: SectionWithPages  # The processed section
+    sections: List[SectionWithPages]  # Multiple processed sections
     prompts: List[SectionExtractPrompt]  # Sibling array of prompts with results
     error: Optional[str] = None
     genai_file_name: Optional[str] = None
