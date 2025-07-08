@@ -344,8 +344,8 @@ async def enhance_simple_lessons_endpoint(request: EnhanceLessonsRequest):
 async def health_check():
     if not credentials:
          return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "Credentials not loaded. Check GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 in settings."})
-    if not storage_service or not pdf_splitter_service or not gemini_analysis_service or not pdf_text_extractor_service:
-        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "One or more required services not initialized. Check configuration and logs."})
+    if not storage_service or not gemini_analysis_service:
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "Required services (Storage, Generative Analysis) not initialized. Check configuration and logs."})
     return {"status": "ok"}
 
 @app.get("/debug/files", status_code=status.HTTP_200_OK)
