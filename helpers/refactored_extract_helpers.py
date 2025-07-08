@@ -18,7 +18,9 @@ from models import (
     SectionExtractPrompt,
     SectionWithPrompts,
     AnalyzeResultWithPrompts,
-    AnalyzeResponseItemSuccess
+    AnalyzeResponseItemSuccess,
+    ExtractRequest,
+    ExtractResponse
 )
 from services.google_drive_service import StorageService
 from services.generative_analysis_service import GenerativeAnalysisService
@@ -82,14 +84,14 @@ async def _execute_section_extraction_api_call(
 
     if status == "SUCCESS":
         prompt.result = api_output_data
-        print(f"SUCCESS (Refactored Extract): Section '{section_name}', Prompt '{prompt.prompt_name}'.")
+        print(f"SUCCESS (Extract): Section '{section_name}', Prompt '{prompt.prompt_name}'.")
         return False
     elif status == "RATE_LIMIT" or status == "ERROR_API":
-        print(f"{status} (Refactored Extract): Section '{section_name}', Prompt '{prompt.prompt_name}'. Error: {str(api_output_data)[:100]}")
+        print(f"{status} (Extract): Section '{section_name}', Prompt '{prompt.prompt_name}'. Error: {str(api_output_data)[:100]}")
         if api_attempt_count + 1 < settings.max_api_retries:
-            print(f"Re-queuing for API retry (Refactored Extract): Section '{section_name}', Prompt '{prompt.prompt_name}' (API attempt {api_attempt_count + 2}).")
+            print(f"Re-queuing for API retry (Extract): Section '{section_name}', Prompt '{prompt.prompt_name}' (API attempt {api_attempt_count + 2}).")
             retry_task_details = {
-                "type": "refactored_extraction_api_retry",
+                "type": "extract_api_retry",
                 "section_name": section_name,
                 "page_range": page_range,
                 "prompt": prompt,
@@ -97,12 +99,12 @@ async def _execute_section_extraction_api_call(
             }
             api_retry_queue.append(retry_task_details)
         else:
-            err_msg = f"Max API retries ({settings.max_api_retries}) for refactored extraction: Section '{section_name}', Prompt '{prompt.prompt_name}'. Last: [{status}] {str(api_output_data)[:100]}"
+            err_msg = f"Max API retries ({settings.max_api_retries}) for extraction: Section '{section_name}', Prompt '{prompt.prompt_name}'. Last: [{status}] {str(api_output_data)[:100]}"
             print(err_msg)
             prompt.result = f"Error after {settings.max_api_retries} retries: {str(api_output_data)[:100]}"
         return True
     else:
-        err_msg = f"Permanent Error (Refactored Extract): Section '{section_name}', Prompt '{prompt.prompt_name}': [{status}] {str(api_output_data)[:100]}"
+        err_msg = f"Permanent Error (Extract): Section '{section_name}', Prompt '{prompt.prompt_name}': [{status}] {str(api_output_data)[:100]}"
         print(err_msg)
         prompt.result = f"Permanent error: {str(api_output_data)[:100]}"
         return False
@@ -300,6 +302,174 @@ async def process_refactored_extract_request(
             success=False,
             result=None,
             error=f"An internal server error occurred during extraction: {str(ex)}"
+        )
+    finally:
+        # Note: File cleanup is not performed here as files are needed for subsequent processing
+        # Gemini AI automatically cleans up unused files after a few hours
+        pass 
+
+
+async def process_extract_request(
+    request: ExtractRequest,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService
+) -> ExtractResponse:
+    """Process the extract request with a single section and sibling prompts array"""
+    
+    target_file_id = request.originalDriveFileId
+    section_name = request.section.sectionName
+    page_range = request.section.pageRange
+    print(f"Processing Extract Request for file ID: {target_file_id}, section: {section_name}")
+
+    extraction_ctx = RefactoredExtractionContext(target_drive_file_id=target_file_id)
+    extraction_ctx.target_drive_file_name = request.originalDriveFileName
+
+    try:
+        if request.genai_file_name:
+            extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.get_file_by_name(request.genai_file_name)
+            if not extraction_ctx.uploaded_target_gfile:
+                return ExtractResponse(
+                    success=False,
+                    originalDriveFileId=target_file_id,
+                    originalDriveFileName=request.originalDriveFileName,
+                    originalDriveParentFolderId=request.originalDriveParentFolderId,
+                    section=request.section,
+                    prompts=request.prompts,
+                    error=f"Failed to retrieve existing Gemini file: {request.genai_file_name}",
+                    genai_file_name=None
+                )
+        else:
+            # Upload the target file to Gemini AI
+            print(f"Uploading target file to Gemini AI: {target_file_id}")
+            extraction_ctx.uploaded_target_gfile = await gemini_analysis_service.upload_file_to_gemini(
+                target_file_id, storage_service
+            )
+            if not extraction_ctx.uploaded_target_gfile:
+                return ExtractResponse(
+                    success=False,
+                    originalDriveFileId=target_file_id,
+                    originalDriveFileName=request.originalDriveFileName,
+                    originalDriveParentFolderId=request.originalDriveParentFolderId,
+                    section=request.section,
+                    prompts=request.prompts,
+                    error="Failed to upload target file to Gemini AI",
+                    genai_file_name=None
+                )
+
+        # Process each prompt for the section
+        api_retry_queue = deque()
+        data_dependency_deferred_queue = deque()
+
+        # Queue all prompts for processing
+        for prompt in request.prompts:
+            data_dependency_deferred_queue.append({
+                "type": "extract_data_dependency",
+                "section_name": section_name,
+                "page_range": page_range,
+                "prompt": prompt,
+                "dd_attempt_count": 0
+            })
+
+        last_rate_limit_time = None
+        processing_cycles = 0
+        total_prompts = len(request.prompts)
+        max_cycles = total_prompts * (settings.max_api_retries + settings.max_data_dependency_retries + 2)
+
+        while data_dependency_deferred_queue or api_retry_queue:
+            processing_cycles += 1
+            if processing_cycles > max_cycles:
+                print(f"Warning (Extract): Max processing cycles reached. Breaking.")
+                break
+
+            # Process API retry queue
+            if api_retry_queue:
+                if not (last_rate_limit_time and (time.monotonic() - last_rate_limit_time < settings.retry_cooldown_seconds)):
+                    api_task_details = api_retry_queue.popleft()
+                    if api_task_details.get("type") == "extract_api_retry":
+                        rate_limit_hit = await _execute_section_extraction_api_call(
+                            gemini_analysis_service,
+                            extraction_ctx,
+                            api_task_details["section_name"],
+                            api_task_details["page_range"],
+                            api_task_details["prompt"],
+                            api_task_details["api_attempt_count"],
+                            api_retry_queue
+                        )
+                        if rate_limit_hit:
+                            last_rate_limit_time = time.monotonic()
+                    else:
+                        api_retry_queue.appendleft(api_task_details)
+                    await asyncio.sleep(0.1)
+                    continue
+
+            # Process data dependency queue
+            if data_dependency_deferred_queue:
+                dd_task_details = data_dependency_deferred_queue.popleft()
+                if dd_task_details.get("type") == "extract_data_dependency":
+                    prompt = dd_task_details["prompt"]
+                    dd_attempts = dd_task_details["dd_attempt_count"]
+
+                    # Check if we're in rate limit cooldown
+                    if last_rate_limit_time and (time.monotonic() - last_rate_limit_time < settings.retry_cooldown_seconds):
+                        dd_task_details["dd_attempt_count"] = dd_attempts
+                        data_dependency_deferred_queue.append(dd_task_details)
+                        await asyncio.sleep(0.1)
+                        continue
+
+                    # Execute the API call
+                    api_call_requeued = await _execute_section_extraction_api_call(
+                        gemini_analysis_service,
+                        extraction_ctx,
+                        section_name,
+                        page_range,
+                        prompt,
+                        0,
+                        api_retry_queue
+                    )
+                    if api_call_requeued:
+                        last_rate_limit_time = time.monotonic()
+
+                else:
+                    data_dependency_deferred_queue.appendleft(dd_task_details)
+                await asyncio.sleep(0.05)
+                continue
+
+            # Handle cooldown periods
+            if not data_dependency_deferred_queue and not api_retry_queue and \
+               last_rate_limit_time and (time.monotonic() - last_rate_limit_time < settings.retry_cooldown_seconds):
+                await asyncio.sleep(0.2)
+
+        # Handle any remaining tasks in queues
+        if data_dependency_deferred_queue or api_retry_queue:
+            print(f"Warning (Extract): Queues not empty. DataQ:{len(data_dependency_deferred_queue)}, ApiQ:{len(api_retry_queue)}")
+            for task in list(data_dependency_deferred_queue):
+                if task.get("type") == "extract_data_dependency":
+                    task["prompt"].result = "Processing cycle limit reached while waiting for data dependency."
+
+        # Build the response
+        print(f"Finished processing extract for file ID: {target_file_id}, section: {section_name}")
+        return ExtractResponse(
+            success=True,
+            originalDriveFileId=target_file_id,
+            originalDriveFileName=request.originalDriveFileName,
+            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            section=request.section,
+            prompts=request.prompts,
+            genai_file_name=extraction_ctx.uploaded_target_gfile.name
+        )
+
+    except Exception as ex:
+        print(f"Unhandled critical error processing extract for file {target_file_id}, section {section_name}: {ex}")
+        traceback.print_exc()
+        return ExtractResponse(
+            success=False,
+            originalDriveFileId=target_file_id,
+            originalDriveFileName=request.originalDriveFileName,
+            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            section=request.section,
+            prompts=request.prompts,
+            error=f"An internal server error occurred during extraction: {str(ex)}",
+            genai_file_name=None
         )
     finally:
         # Note: File cleanup is not performed here as files are needed for subsequent processing

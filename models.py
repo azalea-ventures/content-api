@@ -10,7 +10,7 @@ class PromptItem(BaseModel):
     """Defines a single prompt to be processed."""
     prompt_name: str
     prompt_template: str
-    # For /extract, this refers to outputs of other prompts in the same ExtractTask
+    # For /extract, this refers to outputs of other prompts in the same extraction task
     # For /enhance, this refers to 'content' or outputs of other prompts on the same Slide/LessonSimple
     lesson_properties_to_append: List[str] = Field(default_factory=list)
     
@@ -76,7 +76,7 @@ class EnhanceLessonsResponse(BaseModel):
     lessons: List[LessonSimple]
 
 
-# --- MODELS FOR /extract (REVISED) ---
+# --- SHARED DATA STRUCTURES ---
 
 # This might be specific to a type of extraction, can be kept if useful
 # or if the output of certain extraction prompts should conform to this.
@@ -85,32 +85,6 @@ class ExtractedSectionDataItem(BaseModel):
     title: Optional[str] = None
     paragraph: str
 ExtractedDataDict = Dict[str, List[ExtractedSectionDataItem]]
-
-
-class ExtractTask(BaseModel):
-    """Defines a task to perform multiple extractions on a single target document."""
-    task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    target_drive_file_id: str
-    prompts: List[PromptItem]
-
-class ExtractTaskResponseItemSuccess(BaseModel):
-    task_id: str
-    target_drive_file_id: str
-    target_drive_file_name: Optional[str] = None
-    extraction_results: List[GeneratedContentItem]
-    genai_file_name: Optional[str] = None
-
-class ExtractTaskResponseItemError(BaseModel):
-    task_id: str
-    target_drive_file_id: str
-    error: str
-    detail: Optional[str] = None
-    failed_prompt_name: Optional[str] = None # Optionally pinpoint which prompt caused task-level failure
-
-class BatchExtractTaskResult(BaseModel):
-    success: bool # Overall success of processing the ExtractTask item
-    result: Optional[ExtractTaskResponseItemSuccess] = None
-    error_info: Optional[ExtractTaskResponseItemError] = None
 
 # --- SHARED MODELS (Used by multiple endpoints) ---
 class SectionInfo(BaseModel):
@@ -130,30 +104,7 @@ class SectionWithPages(BaseModel):
     pages: List[PageInfo]
     prompts: Optional[List["SectionExtractPrompt"]] = None
 
-# --- NEW COMBINED EXTRACT MODELS ---
 
-class SectionExtractionResult(BaseModel):
-    """Result for a single section's extraction"""
-    section_name: str
-    page_range: str
-    extracted_data: Dict[str, Any]  # The extracted data for this section
-
-class CombinedExtractRequest(BaseModel):
-    """Combined request for section analysis + extraction"""
-    target_drive_file_id: str
-    analysis_prompt: str  # Prompt for identifying sections
-    extraction_prompts: List[PromptItem]  # Prompts for extracting data from sections
-    output_json_format_example: Optional[Dict[str, Any]] = None  # Example format for extraction
-
-class CombinedExtractResponse(BaseModel):
-    """Response from combined extract endpoint"""
-    target_drive_file_id: str
-    target_drive_file_name: Optional[str] = None
-    sections: List[SectionInfo]  # Section analysis results
-    section_extractions: List[SectionExtractionResult]  # Extraction results per section
-    success: bool
-    error: Optional[str] = None
-    genai_file_name: Optional[str] = None
 
 # --- NEW REFACTORED EXTRACT MODELS ---
 
@@ -177,15 +128,29 @@ class AnalyzeResultWithPrompts(BaseModel):
     originalDriveParentFolderId: str
     sections: List[SectionWithPrompts]
 
-class RefactoredExtractRequest(BaseModel):
-    """New extract request that accepts analyze response data (matches the attached format)"""
-    success: bool
-    result: AnalyzeResultWithPrompts
+class ExtractRequest(BaseModel):
+    originalDriveFileId: str
+    originalDriveFileName: Optional[str] = None
+    originalDriveParentFolderId: Optional[str] = None
+    section: SectionWithPages  # Single section without prompts
+    genai_file_name: Optional[str] = None
+    prompts: List[SectionExtractPrompt]  # Sibling array of prompts
 
 class RefactoredExtractResponse(BaseModel):
     """Response from the refactored extract endpoint (matches the request format)"""
     success: bool
     result: Optional[AnalyzeResultWithPrompts] = None
+    error: Optional[str] = None
+    genai_file_name: Optional[str] = None
+
+class ExtractResponse(BaseModel):
+    """Response from the updated extract endpoint with prompts as sibling of sections"""
+    success: bool
+    originalDriveFileId: str
+    originalDriveFileName: Optional[str] = None
+    originalDriveParentFolderId: Optional[str] = None
+    section: SectionWithPages  # The processed section
+    prompts: List[SectionExtractPrompt]  # Sibling array of prompts with results
     error: Optional[str] = None
     genai_file_name: Optional[str] = None
 

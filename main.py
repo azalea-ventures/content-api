@@ -26,11 +26,11 @@ from models import (
     SectionInfo, AnalyzeRequestItem, AnalyzeResponseItemSuccess, AnalyzeResponseItemError,
     BatchAnalyzeItemResult, SplitRequest, SplitResponseItemSuccess, SplitResponseItemError,
     BatchSplitItemResult, UploadedFileInfo, 
-    ExtractTask, BatchExtractTaskResult, # Revised Extract models
     ExtractedDataDict,
-    CombinedExtractRequest, CombinedExtractResponse,
     # New refactored extract models
-    RefactoredExtractResponse, SectionExtractPrompt, PageInfo, SectionWithPrompts, AnalyzeResultWithPrompts
+    RefactoredExtractResponse, SectionExtractPrompt, PageInfo, SectionWithPrompts, AnalyzeResultWithPrompts,
+    # New extract models for n8n workflow
+    ExtractRequest, ExtractResponse
 )
 
 from services.google_drive_service import GoogleDriveService, StorageService
@@ -49,9 +49,7 @@ from helpers.enhance_helpers import (
     _execute_api_call_for_prompt,
     get_or_create_output_item
 )
-from helpers.extract_helpers import process_single_extract_task
-from helpers.combined_extract_helpers import process_combined_extract_request
-from helpers.refactored_extract_helpers import process_refactored_extract_request
+from helpers.refactored_extract_helpers import process_refactored_extract_request, process_extract_request
 
 
 load_dotenv()
@@ -112,59 +110,11 @@ except Exception as e:
 app = FastAPI(
     title="Content API",
     description="Analyzes, extracts, splits, and enhances documents using Gemini AI and PyMuPDF.",
-    version="1.1.0", 
+    version="1.2.0", 
 )
 
-@app.post("/extract", response_model=List[BatchExtractTaskResult], status_code=status.HTTP_200_OK)
-async def extract_data_endpoint(tasks: List[ExtractTask]):
-    if not storage_service or not gemini_analysis_service:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Required services (Storage, Generative Analysis) are not configured or failed to initialize."
-        )
-    if not tasks:
-        return []
-    print(f"Received batch extract request for {len(tasks)} tasks.")
-    
-    # Process tasks sequentially for now, as each task has internal concurrency/retry logic.
-    # For concurrent processing of multiple ExtractTask items, wrap in asyncio.gather.
-    batch_results: List[BatchExtractTaskResult] = []
-    for extract_task_item in tasks:
-        result = await process_single_extract_task(
-            extract_task_item,
-            storage_service,
-            gemini_analysis_service
-            # pdf_text_extractor_service is not directly passed if not used by the helper
-        )
-        batch_results.append(result)
-        
-    print(f"Finished batch extract request. Processed {len(tasks)} tasks.")
-    return batch_results
-
-@app.post("/extract/combined", response_model=CombinedExtractResponse, status_code=status.HTTP_200_OK)
-async def combined_extract_endpoint(request: CombinedExtractRequest):
-    """
-    Combined endpoint that analyzes document sections and extracts data in one operation.
-    Eliminates the need for separate /analyze and /extract calls.
-    Uploads the file once to Gemini and uses it for both section analysis and data extraction.
-    """
-    if not storage_service or not gemini_analysis_service:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Required services (Storage, Generative Analysis) are not configured or failed to initialize."
-        )
-    
-    if not request:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
-    
-    print(f"Combined extract request for file: {request.target_drive_file_id}")
-    result = await process_combined_extract_request(request, storage_service, gemini_analysis_service)
-    print(f"Finished combined extract for file: {request.target_drive_file_id}")
-    
-    return result
-
-@app.post("/extract/refactored", response_model=RefactoredExtractResponse, status_code=status.HTTP_200_OK)
-async def refactored_extract_endpoint(request: AnalyzeResponseItemSuccess):
+@app.post("/extract", response_model=ExtractResponse, status_code=status.HTTP_200_OK)
+async def extract_endpoint(request: ExtractRequest):
     if not storage_service or not gemini_analysis_service:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -174,9 +124,9 @@ async def refactored_extract_endpoint(request: AnalyzeResponseItemSuccess):
     if not request:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
 
-    print(f"Refactored extract request for file: {request.originalDriveFileId}")
-    result = await process_refactored_extract_request(request, storage_service, gemini_analysis_service)
-    print(f"Finished refactored extract for file: {request.originalDriveFileId}")
+    print(f"Extract request for file: {request.originalDriveFileId}, section: {request.section.sectionName}")
+    result = await process_extract_request(request, storage_service, gemini_analysis_service)
+    print(f"Finished extract for file: {request.originalDriveFileId}, section: {request.section.sectionName}")
     return result
 
 @app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)

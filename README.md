@@ -128,49 +128,75 @@ The API exposes the following endpoints:
 ### Extract Data
 
 *   **Endpoint:** `POST /extract`
-*   **Description:** Processes a batch of requests to extract structured data from PDF files stored in Google Drive. It uses a target PDF, a prompt document (also from Drive), and an example JSON output format to guide the extraction.
-*   **Request Body:** A list of `ExtractRequestItem` objects. See [`models.py`](./models.py) for the `ExtractRequestItem` structure.
+*   **Description:** Extracts structured data from a single section of a PDF file stored in Google Drive. Designed for n8n workflows, it processes multiple prompts for a single section and returns results with prompts as a sibling property.
+*   **Request Body:** `ExtractRequest` object. See [`models.py`](./models.py) for the `ExtractRequest` structure.
     ```json
-    // Example ExtractRequestItem (within a list)
     {
-        "target_file_id": "google_drive_pdf_file_id_to_extract_from",
-        "prompt_document_file_id": "google_drive_text_file_id_for_prompt",
-        "output_file_name_suffix": "_extracted_data"
-    }
-    ```
-*   **Response (Success - 200 OK):** A list of `BatchExtractItemResult` objects. See [`models.py`](./models.py) for details. Each item indicates success or failure for the corresponding request.
-*   **Dependencies:** `GoogleDriveService`, `PdfTextExtractorService`, `GenerativeAnalysisService`.
-
-### Combined Extract (NEW)
-
-*   **Endpoint:** `POST /extract/combined`
-*   **Description:** **NEW OPTIMIZED ENDPOINT** - Combines section analysis and data extraction in a single operation. Uploads the file once to Gemini and uses it for both identifying sections and extracting data from each section. This eliminates the need for separate `/analyze` and `/extract` calls, reducing API overhead and improving performance.
-*   **Request Body:** `CombinedExtractRequest` object. See [`models.py`](./models.py) for the structure.
-    ```json
-    // Example CombinedExtractRequest
-    {
-        "target_drive_file_id": "google_drive_pdf_file_id",
-        "analysis_prompt": "Identify the main sections of this document and their page ranges.",
-        "extraction_prompts": [
+        "originalDriveFileId": "google_drive_pdf_file_id_to_extract_from",
+        "originalDriveFileName": "document.pdf",
+        "originalDriveParentFolderId": "parent_folder_id",
+        "section": {
+            "sectionName": "Introduction",
+            "pageRange": "1-3",
+            "pages": [
+                {"pageNumber": 1, "pageLabel": "1"},
+                {"pageNumber": 2, "pageLabel": "2"},
+                {"pageNumber": 3, "pageLabel": "3"}
+            ]
+        },
+        "prompts": [
+            {
+                "prompt_name": "extract_content",
+                "prompt_text": "Extract all relevant content from this section, including any key information, data, or important details."
+            },
             {
                 "prompt_name": "extract_key_points",
-                "prompt_template": "Extract the key learning points from this section.",
-                "output_json_format_example_str": "{\"key_points\": [\"point1\", \"point2\"]}"
+                "prompt_text": "Identify the key points and main ideas from this section."
             }
         ],
-        "output_json_format_example": {
-            "key_points": ["example point 1", "example point 2"]
-        }
+        "genai_file_name": "optional_existing_gemini_file_name"
     }
     ```
-*   **Response (Success - 200 OK):** `CombinedExtractResponse` object containing both section analysis results and extracted data for each section.
-*   **Benefits:**
-    - Single file upload to Gemini (reduces API calls)
-    - No temporary split files created
-    - Faster processing time
-    - Lower storage costs
-    - Simplified workflow
-*   **Dependencies:** `StorageService`, `GenerativeAnalysisService`.
+*   **Response (Success - 200 OK):** `ExtractResponse` object with prompts as a sibling property. See [`models.py`](./models.py) for details.
+    ```json
+    {
+        "success": true,
+        "originalDriveFileId": "your_file_id",
+        "originalDriveFileName": "document.pdf",
+        "originalDriveParentFolderId": "parent_folder_id",
+        "section": {
+            "sectionName": "Introduction",
+            "pageRange": "1-3",
+            "pages": [
+                {"pageNumber": 1, "pageLabel": "1"},
+                {"pageNumber": 2, "pageLabel": "2"},
+                {"pageNumber": 3, "pageLabel": "3"}
+            ]
+        },
+        "prompts": [
+            {
+                "prompt_name": "extract_content",
+                "prompt_text": "Extract all relevant content from this section...",
+                "result": "Content extracted from the introduction section..."
+            },
+            {
+                "prompt_name": "extract_key_points",
+                "prompt_text": "Identify the key points and main ideas...",
+                "result": "Key points identified: 1. Main concept... 2. Supporting details..."
+            }
+        ],
+        "genai_file_name": "uploaded_file_name"
+    }
+    ```
+*   **Dependencies:** `GoogleDriveService`, `GenerativeAnalysisService`.
+*   **Key Features:**
+    - **n8n Workflow Optimized**: Single section processing with sibling prompts array
+    - **Multiple Prompts**: Processes multiple prompts for the same section
+    - **Section Context**: Automatically adds section name and page range to prompts
+    - **File Reuse**: Optionally reuse existing Gemini AI files to avoid re-uploading
+    - **Rate Limiting**: Includes comprehensive retry logic and rate limiting
+
+
 
 ### Analyze Documents
 
@@ -264,9 +290,9 @@ The API exposes the following endpoints:
     *   Retries prompts if their data dependencies are not yet met (`MAX_DATA_DEPENDENCY_RETRIES`).
     *   Retries API calls on failure up to `MAX_API_RETRIES_PER_TASK` (defined in `helpers/enhance_helpers.py`).
 
-### `/extract/refactored` (NEW)
+### Extract Documents (Legacy Refactored Endpoint)
 
-This endpoint accepts the `result` property from the `/analyze` response directly, making it easy to map in n8n workflows. It automatically adds default extraction prompts to each section and processes them.
+This endpoint accepts the `result` property from the `/analyze` response directly, making it easy to map in n8n workflows. It automatically adds default extraction prompts to each section and processes them. **Note: This is the legacy refactored endpoint. For new n8n workflows, use the `/extract` endpoint above.**
 
 **Request Body:** The `result` property from the `/analyze` response (type: `AnalyzeResponseItemSuccess`)
 ```json
