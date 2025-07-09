@@ -115,10 +115,10 @@ app = FastAPI(
 
 @app.post("/extract", response_model=ExtractResponse, status_code=status.HTTP_200_OK)
 async def extract_endpoint(request: ExtractRequest):
-    if not storage_service or not gemini_analysis_service:
+    if not storage_service or not gemini_analysis_service or not pdf_splitter_service:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Required services (Storage, Generative Analysis) are not configured or failed to initialize."
+            detail="Required services (Storage, Generative Analysis, PDF Splitter) are not configured or failed to initialize."
         )
 
     if not request:
@@ -129,10 +129,10 @@ async def extract_endpoint(request: ExtractRequest):
     # Use concurrent processing by default if enabled globally
     if settings.enable_concurrent_processing:
         from helpers.refactored_extract_helpers import process_extract_request_concurrent
-        result = await process_extract_request_concurrent(request, storage_service, gemini_analysis_service)
+        result = await process_extract_request_concurrent(request, storage_service, gemini_analysis_service, pdf_splitter_service)
     else:
         from helpers.refactored_extract_helpers import process_extract_request
-        result = await process_extract_request(request, storage_service, gemini_analysis_service)
+        result = await process_extract_request(request, storage_service, gemini_analysis_service, pdf_splitter_service)
     
     print(f"Finished extract for file: {request.originalDriveFileId}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     return result
