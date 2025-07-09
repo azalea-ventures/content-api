@@ -1,5 +1,6 @@
 import io
 import fitz # PyMuPDF
+import gc
 from typing import List, Dict, Any, Optional, Tuple
 
 # Define a structure for the section info we receive
@@ -104,3 +105,131 @@ class PdfSplitterService:
         except Exception as e:
             print(f"PdfSplitter: Critical error opening or processing original PDF: {e}")
             return [] # Return empty list on critical failure
+
+    def split_pdf_by_sections_batched(self, pdf_stream: io.BytesIO, sections: List[Dict[str, str]], batch_size: int = 5) -> List[Dict[str, Any]]:
+        """
+        Splits a PDF stream into separate PDFs based on provided section page ranges, processing in batches for memory efficiency.
+
+        Args:
+            pdf_stream: An io.BytesIO stream containing the original PDF content.
+            sections: A list of dictionaries, each with 'section_name' and 'page_range'.
+            batch_size: Number of sections to process in each batch (default: 5).
+
+        Returns:
+            A list of dictionaries, each containing 'section_name', 'fileName',
+            and 'fileContent' (io.BytesIO stream) for each successfully split section.
+        """
+        split_files_info = []
+
+        if not pdf_stream or pdf_stream.getbuffer().nbytes == 0:
+            print("PDF stream is empty or invalid for splitting.")
+            return split_files_info
+        if not sections:
+            print("No sections provided for splitting.")
+            return split_files_info
+
+        pdf_stream.seek(0) # Ensure stream is at the beginning
+
+        try:
+            original_doc = fitz.open(stream=pdf_stream, filetype="pdf")
+            num_original_pages = original_doc.page_count
+            print(f"PdfSplitter: Opened original PDF with {num_original_pages} pages for batched processing.")
+
+            # Process sections in batches
+            for i in range(0, len(sections), batch_size):
+                batch_sections = sections[i:i + batch_size]
+                batch_start = i + 1
+                batch_end = min(i + batch_size, len(sections))
+                
+                print(f"PdfSplitter: Processing batch {batch_start}-{batch_end} of {len(sections)} sections.")
+                
+                batch_results = self._process_section_batch(original_doc, batch_sections, num_original_pages)
+                split_files_info.extend(batch_results)
+                
+                # Force garbage collection after each batch
+                gc.collect()
+                print(f"PdfSplitter: Completed batch {batch_start}-{batch_end}, garbage collection performed.")
+
+            original_doc.close() # Close the original document
+            print(f"PdfSplitter: Finished batched splitting process. Total sections processed: {len(split_files_info)}")
+            return split_files_info
+
+        except Exception as e:
+            print(f"PdfSplitter: Critical error opening or processing original PDF: {e}")
+            return [] # Return empty list on critical failure
+
+    def _process_section_batch(self, original_doc: fitz.Document, batch_sections: List[Dict[str, str]], num_original_pages: int) -> List[Dict[str, Any]]:
+        """
+        Process a batch of sections from the original PDF document.
+        
+        Args:
+            original_doc: The original PDF document (fitz.Document).
+            batch_sections: List of section dictionaries to process in this batch.
+            num_original_pages: Total number of pages in the original document.
+            
+        Returns:
+            List of processed section information dictionaries.
+        """
+        batch_results = []
+        
+        for section in batch_sections:
+            section_name = section.get("section_name", "UnknownSection").replace('/', '_').replace('\\', '_') # Sanitize name for filename
+            page_range_str = section.get("page_range")
+
+            if not page_range_str:
+                print(f"PdfSplitter: Skipping section '{section_name}' due to missing page_range.")
+                continue
+
+            try:
+                # Parse the page range string
+                if '-' in page_range_str:
+                    start_page_str, end_page_str = page_range_str.split('-')
+                    start_page = int(start_page_str)
+                    end_page = int(end_page_str)
+                else:
+                    start_page = int(page_range_str)
+                    end_page = start_page
+
+                # Convert 1-indexed pages to 0-indexed for PyMuPDF
+                start_page_0_indexed = start_page - 1
+                end_page_0_indexed = end_page - 1
+
+                # Validate page numbers against original document
+                if start_page_0_indexed < 0 or end_page_0_indexed >= num_original_pages or start_page_0_indexed > end_page_0_indexed:
+                     print(f"PdfSplitter: Skipping section '{section_name}' due to invalid page range: {page_range_str} (Original PDF has {num_original_pages} pages).")
+                     continue
+
+                print(f"PdfSplitter: Splitting section '{section_name}' pages {start_page}-{end_page} (0-indexed {start_page_0_indexed}-{end_page_0_indexed}).")
+
+                # Create a new PDF document for this section
+                section_doc = fitz.open()
+
+                # Copy pages from the original document to the new one
+                section_doc.insert_pdf(original_doc, from_page=start_page_0_indexed, to_page=end_page_0_indexed)
+
+                # Save the new document to an in-memory stream
+                section_stream = io.BytesIO()
+                # Use garbage collection and compression options
+                section_doc.save(section_stream, garbage=4, deflate=True, clean=True)
+                section_stream.seek(0) # Rewind the stream
+
+                section_doc.close() # Close the section document
+
+                # Determine the suggested filename (placeholder for original name part)
+                # The original file name will be added in the main endpoint
+                suggested_file_name = f"{section_name}.pdf" # Original name prepended later
+
+                batch_results.append({
+                    "section_name": section_name, # Keep original section name for reference
+                    "fileName": suggested_file_name,
+                    "fileContent": section_stream
+                })
+                print(f"PdfSplitter: Successfully split and saved section '{section_name}'.")
+
+            except ValueError:
+                print(f"PdfSplitter: Skipping section '{section_name}' due to unparseable page_range: {page_range_str}.")
+            except Exception as split_ex:
+                print(f"PdfSplitter: Error splitting section '{section_name}' with range {page_range_str}: {split_ex}")
+                # Continue with other sections
+        
+        return batch_results

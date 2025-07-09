@@ -33,4 +33,8 @@ class Settings(BaseSettings):
     section_processing_delay_seconds: float = 0.1  # Delay between section processing
     force_garbage_collection: bool = True  # Force garbage collection after each section
 
+    # Split batching configuration
+    split_batch_size: int = 5  # Number of sections to process in each batch
+    split_batch_delay_seconds: float = 0.5  # Delay between batches for memory cleanup
+
 settings = Settings()
