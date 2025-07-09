@@ -7,7 +7,9 @@ import uuid
 import re
 import traceback
 import asyncio
+import psutil
 from collections import deque
+from asyncio import Semaphore
 from typing import Optional, List, Dict, Any, Tuple
 
 from pydantic import BaseModel, Field
@@ -876,3 +878,424 @@ async def process_extract_request_concurrent(
             error=f"An internal server error occurred during extraction: {str(ex)}",
             genai_file_name=None
         ) 
+
+
+async def process_extract_request_concurrent_enhanced(
+    request: ExtractRequest,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService,
+    pdf_splitter_service: PdfSplitterService
+) -> ExtractResponse:
+    """Process the extract request using enhanced concurrent section processing"""
+    
+    target_file_id = request.originalDriveFileId
+    print(f"Processing Enhanced Concurrent Extract Request for file ID: {target_file_id}")
+
+    # Create semaphores for resource control
+    section_task_semaphore = Semaphore(settings.max_concurrent_section_tasks)
+    upload_semaphore = Semaphore(settings.max_concurrent_uploads)
+    split_semaphore = Semaphore(settings.max_concurrent_splits)
+
+    try:
+        # Download the original PDF once (shared resource)
+        original_pdf_stream = storage_service.download_file_content(target_file_id)
+        if not original_pdf_stream or original_pdf_stream.getbuffer().nbytes == 0:
+            return ExtractResponse(
+                success=False,
+                originalDriveFileId=target_file_id,
+                originalDriveFileName=request.originalDriveFileName,
+                originalDriveParentFolderId=request.originalDriveParentFolderId,
+                sections=request.sections,
+                prompt=request.prompt,
+                error="Failed to download original PDF",
+                genai_file_name=None
+            )
+
+        # Create tasks for all sections with resource control
+        tasks = []
+        for section in request.sections:
+            # Create a copy of the prompt for this section
+            section_prompt = SectionExtractPrompt(
+                prompt_name=request.prompt.prompt_name,
+                prompt_text=request.prompt.prompt_text,
+                result=None
+            )
+            
+            # Add the prompt to the section's prompts array
+            if section.prompts is None:
+                section.prompts = []
+            if section_prompt not in section.prompts:
+                section.prompts.append(section_prompt)
+            
+            # Create enhanced task for this section
+            task = process_single_section_task_enhanced(
+                section=section,
+                section_prompt=section_prompt,
+                original_pdf_stream=original_pdf_stream,
+                storage_service=storage_service,
+                gemini_analysis_service=gemini_analysis_service,
+                pdf_splitter_service=pdf_splitter_service,
+                section_task_semaphore=section_task_semaphore,
+                upload_semaphore=upload_semaphore,
+                split_semaphore=split_semaphore
+            )
+            tasks.append(task)
+
+        # Execute all tasks concurrently with resource limits
+        print(f"Executing {len(tasks)} enhanced concurrent section tasks...")
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results and handle retries
+        failed_tasks = []
+        successful_sections = []
+        
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                section = request.sections[i]
+                print(f"Exception in enhanced concurrent task for section '{section.sectionName}': {result}")
+                failed_tasks.append({
+                    "section": section,
+                    "prompt": section.prompts[i] if section.prompts else None,
+                    "error": str(result),
+                    "retry_count": 0
+                })
+            elif result["success"]:
+                successful_sections.append(result)
+            else:
+                # Handle failed but non-exception results
+                failed_tasks.append({
+                    "section": request.sections[i],
+                    "prompt": result.get("prompt"),
+                    "error": result.get("error", "Unknown error"),
+                    "retry_count": 0
+                })
+
+        # Handle retries for failed tasks
+        if failed_tasks:
+            print(f"Retrying {len(failed_tasks)} failed tasks...")
+            retry_results = await retry_failed_section_tasks(
+                failed_tasks,
+                original_pdf_stream,
+                storage_service,
+                gemini_analysis_service,
+                pdf_splitter_service,
+                section_task_semaphore,
+                upload_semaphore,
+                split_semaphore
+            )
+            successful_sections.extend([r for r in retry_results if r["success"]])
+
+        # Close the original PDF stream
+        original_pdf_stream.close()
+
+        # Build the response
+        print(f"Finished processing enhanced concurrent extract for file ID: {target_file_id}")
+        return ExtractResponse(
+            success=len(successful_sections) > 0,
+            originalDriveFileId=target_file_id,
+            originalDriveFileName=request.originalDriveFileName,
+            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            sections=request.sections,
+            prompt=request.prompt,
+            genai_file_name=None
+        )
+
+    except Exception as ex:
+        print(f"Unhandled critical error in enhanced concurrent extract for file {target_file_id}: {ex}")
+        traceback.print_exc()
+        return ExtractResponse(
+            success=False,
+            originalDriveFileId=target_file_id,
+            originalDriveFileName=request.originalDriveFileName,
+            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            sections=request.sections,
+            prompt=request.prompt,
+            error=f"An internal server error occurred during extraction: {str(ex)}",
+            genai_file_name=None
+        )
+
+
+async def process_single_section_task_enhanced(
+    section: Any,
+    section_prompt: SectionExtractPrompt,
+    original_pdf_stream: io.BytesIO,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService,
+    pdf_splitter_service: PdfSplitterService,
+    section_task_semaphore: Semaphore,
+    upload_semaphore: Semaphore,
+    split_semaphore: Semaphore
+) -> Dict[str, Any]:
+    """Process a single section with enhanced resource control and monitoring"""
+    
+    async with section_task_semaphore:
+        section_name = section.sectionName
+        print(f"Starting enhanced section task for '{section_name}'")
+        
+        try:
+            # Check memory usage before starting
+            if settings.enable_memory_monitoring:
+                await check_and_throttle_memory()
+            
+            # Step 1: Split this specific section
+            async with split_semaphore:
+                section_pdf_stream = await split_single_section_enhanced(
+                    original_pdf_stream, 
+                    section, 
+                    pdf_splitter_service
+                )
+            
+            if not section_pdf_stream:
+                return {
+                    "success": False,
+                    "section_name": section_name,
+                    "error": "Failed to split section",
+                    "prompt": section_prompt
+                }
+            
+            # Step 2: Upload this section to Gemini AI
+            async with upload_semaphore:
+                gemini_file = await upload_single_section_enhanced(
+                    section_pdf_stream, 
+                    section_name, 
+                    gemini_analysis_service
+                )
+            
+            if not gemini_file:
+                section_pdf_stream.close()
+                return {
+                    "success": False,
+                    "section_name": section_name,
+                    "error": "Failed to upload section to Gemini AI",
+                    "prompt": section_prompt
+                }
+            
+            # Step 3: Process with Gemini AI
+            result = await process_section_with_gemini_enhanced(
+                gemini_file, 
+                section_prompt, 
+                section_name, 
+                gemini_analysis_service
+            )
+            
+            # Step 4: Cleanup
+            await cleanup_section_resources_enhanced(
+                section_pdf_stream, 
+                gemini_file, 
+                gemini_analysis_service
+            )
+            
+            return {
+                "success": True,
+                "section_name": section_name,
+                "result": result,
+                "prompt": section_prompt
+            }
+            
+        except asyncio.TimeoutError:
+            print(f"Timeout in enhanced section task for '{section_name}'")
+            return {
+                "success": False,
+                "section_name": section_name,
+                "error": "Section task timed out",
+                "prompt": section_prompt
+            }
+        except Exception as e:
+            print(f"Error in enhanced section task for '{section_name}': {e}")
+            return {
+                "success": False,
+                "section_name": section_name,
+                "error": str(e),
+                "prompt": section_prompt
+            }
+
+
+async def split_single_section_enhanced(
+    original_pdf_stream: io.BytesIO,
+    section: Any,
+    pdf_splitter_service: PdfSplitterService
+) -> Optional[io.BytesIO]:
+    """Split a single section with timeout and error handling"""
+    
+    try:
+        # Create a copy of the original stream for this section
+        original_pdf_stream.seek(0)
+        section_copy = io.BytesIO(original_pdf_stream.read())
+        
+        # Convert section to the format expected by the PDF splitter
+        section_for_splitting = {
+            "sectionName": section.sectionName,
+            "pageRange": section.pageRange
+        }
+        
+        # Split with timeout
+        split_results = await asyncio.wait_for(
+            asyncio.to_thread(
+                pdf_splitter_service.split_pdf_by_sections,
+                section_copy,
+                [section_for_splitting]
+            ),
+            timeout=settings.split_timeout_seconds
+        )
+        
+        if split_results and len(split_results) > 0:
+            return split_results[0]["fileContent"]
+        else:
+            section_copy.close()
+            return None
+            
+    except asyncio.TimeoutError:
+        print(f"Timeout splitting section '{section.sectionName}'")
+        return None
+    except Exception as e:
+        print(f"Error splitting section '{section.sectionName}': {e}")
+        return None
+
+
+async def upload_single_section_enhanced(
+    section_pdf_stream: io.BytesIO,
+    section_name: str,
+    gemini_service: GenerativeAnalysisService
+) -> Optional[Any]:
+    """Upload a single section with timeout and error handling"""
+    
+    try:
+        # Create a unique display name for this section
+        unique_id = str(uuid.uuid4())[:8]
+        display_name = f"{section_name}_{unique_id}.pdf"
+        
+        # Upload with timeout
+        gemini_file = await asyncio.wait_for(
+            gemini_service.upload_pdf_for_analysis(section_pdf_stream, display_name),
+            timeout=settings.upload_timeout_seconds
+        )
+        
+        return gemini_file
+        
+    except asyncio.TimeoutError:
+        print(f"Timeout uploading section '{section_name}'")
+        return None
+    except Exception as e:
+        print(f"Error uploading section '{section_name}': {e}")
+        return None
+
+
+async def process_section_with_gemini_enhanced(
+    gemini_file: Any,
+    section_prompt: SectionExtractPrompt,
+    section_name: str,
+    gemini_service: GenerativeAnalysisService
+) -> str:
+    """Process a section with Gemini AI with enhanced error handling"""
+    
+    try:
+        # Add section context to the prompt
+        section_context = f"Focus on the section '{section_name}' when extracting information."
+        final_instructions = f"{section_context}\n\n{section_prompt.prompt_text}"
+        final_instructions += f"\n\nEnsure the output is ONLY the requested information for this specific section."
+
+        multimodal_prompt_parts = [gemini_file, final_instructions]
+
+        # Process with timeout
+        response = await asyncio.wait_for(
+            gemini_service.model.generate_content_async(multimodal_prompt_parts),
+            timeout=settings.gemini_timeout_seconds
+        )
+        
+        if response and response.text:
+            return response.text
+        else:
+            return "No response text received"
+            
+    except asyncio.TimeoutError:
+        print(f"Timeout processing section '{section_name}' with Gemini")
+        return "Processing timed out"
+    except Exception as e:
+        print(f"Error processing section '{section_name}' with Gemini: {e}")
+        return f"Processing error: {str(e)}"
+
+
+async def cleanup_section_resources_enhanced(
+    section_pdf_stream: io.BytesIO,
+    gemini_file: Any,
+    gemini_service: GenerativeAnalysisService
+):
+    """Clean up section resources with error handling"""
+    
+    try:
+        # Close PDF stream
+        if section_pdf_stream:
+            section_pdf_stream.close()
+        
+        # Delete Gemini file
+        if gemini_file:
+            await gemini_service.delete_file(gemini_file)
+            
+    except Exception as e:
+        print(f"Error during section resource cleanup: {e}")
+
+
+async def check_and_throttle_memory():
+    """Check memory usage and throttle if necessary"""
+    
+    try:
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        
+        if memory_mb > settings.max_memory_usage_mb:
+            print(f"Memory usage {memory_mb:.1f}MB exceeds limit {settings.max_memory_usage_mb}MB. Throttling...")
+            await asyncio.sleep(5)  # Throttle for 5 seconds
+        elif memory_mb > settings.memory_throttle_threshold_mb:
+            print(f"Memory usage {memory_mb:.1f}MB above threshold {settings.memory_throttle_threshold_mb}MB. Adding delay...")
+            await asyncio.sleep(1)  # Small delay
+            
+    except Exception as e:
+        print(f"Error checking memory usage: {e}")
+
+
+async def retry_failed_section_tasks(
+    failed_tasks: List[Dict[str, Any]],
+    original_pdf_stream: io.BytesIO,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService,
+    pdf_splitter_service: PdfSplitterService,
+    section_task_semaphore: Semaphore,
+    upload_semaphore: Semaphore,
+    split_semaphore: Semaphore
+) -> List[Dict[str, Any]]:
+    """Retry failed section tasks with exponential backoff"""
+    
+    retry_results = []
+    
+    for failed_task in failed_tasks:
+        if failed_task["retry_count"] < settings.max_api_retries:
+            # Add exponential backoff delay
+            delay = min(2 ** failed_task["retry_count"], 30)  # Max 30 seconds
+            await asyncio.sleep(delay)
+            
+            # Retry the task
+            retry_task = process_single_section_task_enhanced(
+                section=failed_task["section"],
+                section_prompt=failed_task["prompt"],
+                original_pdf_stream=original_pdf_stream,
+                storage_service=storage_service,
+                gemini_analysis_service=gemini_analysis_service,
+                pdf_splitter_service=pdf_splitter_service,
+                section_task_semaphore=section_task_semaphore,
+                upload_semaphore=upload_semaphore,
+                split_semaphore=split_semaphore
+            )
+            
+            try:
+                result = await retry_task
+                retry_results.append(result)
+            except Exception as e:
+                print(f"Retry failed for section '{failed_task['section'].sectionName}': {e}")
+                retry_results.append({
+                    "success": False,
+                    "section_name": failed_task["section"].sectionName,
+                    "error": f"Retry failed: {str(e)}",
+                    "prompt": failed_task["prompt"]
+                })
+    
+    return retry_results 

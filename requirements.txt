@@ -8,3 +8,4 @@ pydantic # For data validation in FastAPI
 pydantic-settings
 python-dotenv # For local development configuration (optional)
 supabase
+psutil # For memory monitoring and system resource management
