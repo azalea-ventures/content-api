@@ -1222,3 +1222,75 @@ async def process_extract_request_memory_efficient(
         error=None,
         genai_file_name=None
     ) 
+
+
+async def _execute_section_extraction_with_preloaded_file(
+    gemini_analysis_service: GenerativeAnalysisService,
+    section: Any,
+    prompt: SectionExtractPrompt
+) -> Dict[str, Any]:
+    section_name = section.section_name
+    genai_file_name = section.genai_file_name
+    try:
+        genai_file = await gemini_analysis_service.get_file_by_name(genai_file_name)
+        if not genai_file:
+            return {"success": False, "section_name": section_name, "prompt": prompt, "error": f"Could not retrieve file '{genai_file_name}'", "rate_limit_hit": False}
+        instructions = f"Focus on the section '{section_name}' when extracting information.\n\n{prompt.prompt_text}\n\nEnsure the output is ONLY the requested information for this specific section."
+        response = await gemini_analysis_service.model.generate_content_async([genai_file, instructions])
+        if response and response.text:
+            prompt.result = response.text
+            return {"success": True, "section_name": section_name, "prompt": prompt, "result": response.text, "rate_limit_hit": False}
+        else:
+            return {"success": False, "section_name": section_name, "prompt": prompt, "error": "No response from Gemini AI", "rate_limit_hit": False}
+    except Exception as e:
+        error_str = str(e).lower()
+        rate_limit_hit = any(phrase in error_str for phrase in ["rate limit", "quota exceeded", "too many requests", "429"])
+        return {"success": False, "section_name": section_name, "prompt": prompt, "error": str(e), "rate_limit_hit": rate_limit_hit}
+
+async def process_extract_request_with_preloaded_files_concurrent(
+    request: ExtractRequest,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService,
+    pdf_splitter_service: PdfSplitterService
+) -> ExtractResponse:
+    print(f"Processing concurrent extract request with pre-loaded files for file: {request.storage_file_id}")
+    sections_with_genai_files = [s for s in request.sections if s.genai_file_name]
+    if not sections_with_genai_files:
+        return ExtractResponse(
+            success=False,
+            storage_file_id=request.storage_file_id,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
+            sections=request.sections,
+            prompt=request.prompt,
+            error="No sections have pre-loaded genai_file_name. Please run /split first."
+        )
+    batch_size = settings.max_concurrent_requests
+    processed_sections = []
+    for batch_start in range(0, len(sections_with_genai_files), batch_size):
+        batch = sections_with_genai_files[batch_start:batch_start+batch_size]
+        tasks = []
+        for section in batch:
+            prompt = SectionExtractPrompt(
+                prompt_name=request.prompt.prompt_name,
+                prompt_text=request.prompt.prompt_text,
+                result=None
+            )
+            section.prompts = [prompt]
+            tasks.append(_execute_section_extraction_with_preloaded_file(gemini_analysis_service, section, prompt))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            section = batch[i]
+            if isinstance(result, Exception) or not result.get("success"):
+                error = str(result) if isinstance(result, Exception) else result.get("error", "Unknown error")
+                section.prompts[0].result = f"Error: {error}"
+            processed_sections.append(section)
+    return ExtractResponse(
+        success=True,
+        storage_file_id=request.storage_file_id,
+        file_name=request.file_name,
+        storage_parent_folder_id=request.storage_parent_folder_id,
+        sections=processed_sections,
+        prompt=request.prompt,
+        genai_file_name=None
+    ) 

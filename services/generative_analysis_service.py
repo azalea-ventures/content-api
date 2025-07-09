@@ -346,6 +346,67 @@ class GenerativeAnalysisService:
             print(f"Error deleting file {file.name}: {e}")
             return False
 
+    async def clear_all_files(self) -> Dict[str, Any]:
+        """
+        Deletes all files from Google AI storage.
+        
+        Returns:
+            Dictionary containing deletion results and statistics
+        """
+        try:
+            print("Starting to clear all files from Google AI storage...")
+            files = list(genai.list_files())  # Convert generator to list
+            total_files = len(files)
+            
+            if total_files == 0:
+                return {
+                    "success": True,
+                    "message": "No files found in Google AI storage",
+                    "total_files": 0,
+                    "deleted_files": 0,
+                    "failed_deletions": 0,
+                    "deleted_file_names": []
+                }
+            
+            deleted_count = 0
+            failed_count = 0
+            deleted_file_names = []
+            
+            for file in files:
+                try:
+                    print(f"Deleting file: {file.name} (display_name: {file.display_name})")
+                    genai.delete_file(name=file.name)
+                    deleted_count += 1
+                    deleted_file_names.append(file.display_name or file.name)
+                    print(f"Successfully deleted file: {file.name}")
+                except Exception as e:
+                    failed_count += 1
+                    print(f"Error deleting file {file.name}: {e}")
+            
+            result = {
+                "success": True,
+                "message": f"Cleared {deleted_count} out of {total_files} files from Google AI storage",
+                "total_files": total_files,
+                "deleted_files": deleted_count,
+                "failed_deletions": failed_count,
+                "deleted_file_names": deleted_file_names
+            }
+            
+            print(f"File clearing completed: {deleted_count} deleted, {failed_count} failed")
+            return result
+            
+        except Exception as e:
+            print(f"Error during file clearing operation: {e}")
+            traceback.print_exc()
+            return {
+                "success": False,
+                "message": f"Error during file clearing operation: {str(e)}",
+                "total_files": 0,
+                "deleted_files": 0,
+                "failed_deletions": 0,
+                "deleted_file_names": []
+            }
+
     async def get_file_by_name(self, file_name: str) -> Optional[types.File]:
         """
         Get a file from Gemini AI storage by its actual file name.
