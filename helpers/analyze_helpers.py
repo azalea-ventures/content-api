@@ -46,11 +46,11 @@ async def process_single_analyze_request(
                 return BatchAnalyzeItemResult(
                     success=False,
                     error_info=AnalyzeResponseItemError(
-                        originalDriveFileId=file_id,
+                        storage_file_id=file_id,
                         error="Original file not found or permission denied to get info."
                     )
                 )
-            original_file_name = original_file_info.get('name', file_id)
+            file_name = original_file_info.get('name', file_id)
             # For GoogleDriveService, 'parents' is a list; for Supabase, use 'user_id' as parent/folder equivalent
             original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
 
@@ -60,7 +60,7 @@ async def process_single_analyze_request(
                 return BatchAnalyzeItemResult(
                     success=False,
                     error_info=AnalyzeResponseItemError(
-                        originalDriveFileId=file_id,
+                        storage_file_id=file_id,
                         error=f"File too large ({file_size / (1024*1024):.1f}MB). Maximum size is 50MB."
                     )
                 )
@@ -68,7 +68,7 @@ async def process_single_analyze_request(
             # Use the new method that only downloads if needed
             uploaded_file = await gemini_analysis_service.upload_pdf_for_analysis_by_file_id(
                 file_id, 
-                original_file_name, 
+                file_name, 
                 storage_service
             )
         else:
@@ -78,17 +78,17 @@ async def process_single_analyze_request(
                 return BatchAnalyzeItemResult(
                     success=False,
                     error_info=AnalyzeResponseItemError(
-                        originalDriveFileId=file_id,
+                        storage_file_id=file_id,
                         error="Original file not found or permission denied to get info."
                     )
                 )
-            original_file_name = original_file_info.get('name', file_id)
+            file_name = original_file_info.get('name', file_id)
             original_parent_folder_id = original_file_info.get('parents', [None])[0] if 'parents' in original_file_info else original_file_info.get('user_id')
         if uploaded_file is None:
             return BatchAnalyzeItemResult(
                 success=False,
                 error_info=AnalyzeResponseItemError(
-                    originalDriveFileId=file_id,
+                    storage_file_id=file_id,
                     error="Failed to upload file for analysis."
                 )
             )
@@ -100,7 +100,7 @@ async def process_single_analyze_request(
             return BatchAnalyzeItemResult(
                 success=False,
                 error_info=AnalyzeResponseItemError(
-                    originalDriveFileId=file_id,
+                    storage_file_id=file_id,
                     error="Failed to analyze document sections with AI."
                 )
             )
@@ -111,16 +111,16 @@ async def process_single_analyze_request(
         sections_with_pages = []
         for section_dict in sections_info_dicts:
             sections_with_pages.append(SectionWithPages(
-                pageRange=section_dict['pageRange'],
-                sectionName=section_dict['sectionName']
+                page_range=section_dict['page_range'],
+                section_name=section_dict['section_name']
             ))
         
         return BatchAnalyzeItemResult(
             success=True,
             result=AnalyzeResponseItemSuccess(
-                originalDriveFileId=file_id,
-                originalDriveFileName=original_file_name,
-                originalDriveParentFolderId=original_parent_folder_id,
+                storage_file_id=file_id,
+                file_name=file_name,
+                storage_parent_folder_id=original_parent_folder_id,
                 sections=sections_with_pages,
                 genai_file_name=genai_file_name if genai_file_name else uploaded_file.name
             )
@@ -131,7 +131,7 @@ async def process_single_analyze_request(
         return BatchAnalyzeItemResult(
             success=False,
             error_info=AnalyzeResponseItemError(
-                originalDriveFileId=file_id,
+                storage_file_id=file_id,
                 error="An internal server error occurred during analysis.",
                 detail=str(ex)
             )

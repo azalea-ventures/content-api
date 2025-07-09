@@ -88,15 +88,16 @@ ExtractedDataDict = Dict[str, List[ExtractedSectionDataItem]]
 
 # --- SHARED MODELS (Used by multiple endpoints) ---
 class SectionInfo(BaseModel):
-    sectionName: str
-    pageRange: str
+    section_name: str
+    page_range: str
 
 # --- SIMPLIFIED SECTION MODELS (Removed individual page objects) ---
 class SectionWithPages(BaseModel):
     """Represents a section with its page range (simplified without individual page objects)"""
-    pageRange: str
-    sectionName: str
+    page_range: str
+    section_name: str
     prompts: Optional[List["SectionExtractPrompt"]] = None
+    genai_file_name: Optional[str] = None  # NEW: Added for split/extract workflow
 
 # --- NEW REFACTORED EXTRACT MODELS ---
 
@@ -109,20 +110,21 @@ class SectionExtractPrompt(BaseModel):
 class SectionWithPrompts(BaseModel):
     """A section with prompts for extraction (simplified without individual page objects)"""
     prompts: Optional[List[SectionExtractPrompt]] = Field(default_factory=list)
-    pageRange: str
-    sectionName: str
+    page_range: str
+    section_name: str
+    genai_file_name: Optional[str] = None  # NEW: Added for split/extract workflow
 
 class AnalyzeResultWithPrompts(BaseModel):
     """The result structure from analyze with prompts added (simplified without individual page objects)"""
-    originalDriveFileId: str
-    originalDriveFileName: str
-    originalDriveParentFolderId: str
+    storage_file_id: str
+    file_name: str
+    storage_parent_folder_id: str
     sections: List[SectionWithPrompts]
 
 class ExtractRequest(BaseModel):
-    originalDriveFileId: str
-    originalDriveFileName: Optional[str] = None
-    originalDriveParentFolderId: Optional[str] = None
+    storage_file_id: str
+    file_name: Optional[str] = None
+    storage_parent_folder_id: Optional[str] = None
     sections: List[SectionWithPages]  # Multiple sections
     genai_file_name: Optional[str] = None
     prompt: SectionExtractPrompt  # Single prompt to apply to all sections
@@ -137,9 +139,9 @@ class RefactoredExtractResponse(BaseModel):
 class ExtractResponse(BaseModel):
     """Response from the updated extract endpoint with prompt as sibling of sections"""
     success: bool
-    originalDriveFileId: str
-    originalDriveFileName: Optional[str] = None
-    originalDriveParentFolderId: Optional[str] = None
+    storage_file_id: str
+    file_name: Optional[str] = None
+    storage_parent_folder_id: Optional[str] = None
     sections: List[SectionWithPages]  # Multiple processed sections
     prompt: SectionExtractPrompt  # Single prompt with results
     error: Optional[str] = None
@@ -152,20 +154,20 @@ class AnalyzeRequestItem(BaseModel):
     genai_file_name: Optional[str] = None
 
 class SplitRequest(BaseModel):
-    originalDriveFileId: str
-    originalDriveFileName: Optional[str] = None
-    originalDriveParentFolderId: Optional[str] = None
+    storage_file_id: str
+    file_name: Optional[str] = None
+    storage_parent_folder_id: Optional[str] = None
     sections: List[SectionInfo]
 
 class AnalyzeResponseItemError(BaseModel):
-    originalDriveFileId: str
+    storage_file_id: str
     error: str
     detail: Optional[str] = None
 
 class AnalyzeResponseItemSuccess(BaseModel):
-    originalDriveFileId: str
-    originalDriveFileName: Optional[str] = None
-    originalDriveParentFolderId: Optional[str] = None
+    storage_file_id: str
+    file_name: Optional[str] = None
+    storage_parent_folder_id: Optional[str] = None
     sections: List[SectionWithPages]  # Updated to use simplified section model
     genai_file_name: Optional[str] = None
 
@@ -175,18 +177,18 @@ class BatchAnalyzeItemResult(BaseModel):
     error_info: Optional[AnalyzeResponseItemError] = None
 
 class UploadedFileInfo(BaseModel):
-    sectionName: str
-    uploadedDriveFileId: Optional[str] = None
-    uploadedDriveFileName: Optional[str] = None
+    section_name: str
+    page_range: str
+    genai_file_name: Optional[str] = None  # NEW: Added for split/extract workflow
 
 class SplitResponseItemSuccess(BaseModel):
-    originalDriveFileId: str
-    originalDriveFileName: Optional[str] = None
-    originalDriveParentFolderId: Optional[str] = None
-    uploadedSections: List[UploadedFileInfo]
+    storage_file_id: str
+    file_name: Optional[str] = None
+    storage_parent_folder_id: Optional[str] = None
+    sections: List[UploadedFileInfo]
 
 class SplitResponseItemError(BaseModel):
-    originalDriveFileId: str
+    storage_file_id: str
     error: str
     detail: Optional[str] = None
 

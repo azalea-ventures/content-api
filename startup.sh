@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 # Set default values if not provided
-export WORKER_TIMEOUT=${WORKER_TIMEOUT:-600}
+export WORKER_TIMEOUT=${WORKER_TIMEOUT:-1800}
 export WORKER_COUNT=${WORKER_COUNT:-2}
 export MAX_REQUESTS=${MAX_REQUESTS:-1000}
 

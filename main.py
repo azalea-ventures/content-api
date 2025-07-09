@@ -49,7 +49,7 @@ from helpers.enhance_helpers import (
     _execute_api_call_for_prompt,
     get_or_create_output_item
 )
-from helpers.refactored_extract_helpers import process_refactored_extract_request, process_extract_request
+from helpers.refactored_extract_helpers import process_refactored_extract_request, process_extract_request, process_extract_request_with_preloaded_files
 
 
 load_dotenv()
@@ -115,26 +115,22 @@ app = FastAPI(
 
 @app.post("/extract", response_model=ExtractResponse, status_code=status.HTTP_200_OK)
 async def extract_endpoint(request: ExtractRequest):
-    if not storage_service or not gemini_analysis_service or not pdf_splitter_service:
+    if not storage_service or not gemini_analysis_service:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Required services (Storage, Generative Analysis, PDF Splitter) are not configured or failed to initialize."
+            detail="Required services (Storage, Generative Analysis) are not configured or failed to initialize."
         )
 
     if not request:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
 
-    print(f"Extract request for file: {request.originalDriveFileId}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
+    print(f"Extract request for file: {request.storage_file_id}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     
-    # Use concurrent processing by default if enabled globally
-    if settings.enable_concurrent_processing:
-        from helpers.refactored_extract_helpers import process_extract_request_concurrent
-        result = await process_extract_request_concurrent(request, storage_service, gemini_analysis_service, pdf_splitter_service)
-    else:
-        from helpers.refactored_extract_helpers import process_extract_request
-        result = await process_extract_request(request, storage_service, gemini_analysis_service, pdf_splitter_service)
+    # Use the new pre-loaded files approach
+    from helpers.refactored_extract_helpers import process_extract_request_with_preloaded_files
+    result = await process_extract_request_with_preloaded_files(request, storage_service, gemini_analysis_service, pdf_splitter_service)
     
-    print(f"Finished extract for file: {request.originalDriveFileId}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
+    print(f"Finished extract for file: {request.storage_file_id}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     return result
 
 @app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)
@@ -150,13 +146,13 @@ async def analyze_documents_endpoint(request: AnalyzeRequestItem):
 
 @app.post("/split", response_model=BatchSplitItemResult, status_code=status.HTTP_200_OK)
 async def split_documents_endpoint(request: SplitRequest):
-    if not storage_service or not pdf_splitter_service:
+    if not storage_service or not pdf_splitter_service or not gemini_analysis_service:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Required services for /split not initialized.")
     if not request:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
-    print(f"Split request: file_id={request.originalDriveFileId}")
-    result = await process_single_split_request(request, storage_service, pdf_splitter_service)
-    print(f"Finished split for file_id={request.originalDriveFileId}.")
+    print(f"Split request: file_id={request.storage_file_id}")
+    result = await process_single_split_request(request, storage_service, pdf_splitter_service, gemini_analysis_service)
+    print(f"Finished split for file_id={request.storage_file_id}.")
     return result
 
 @app.post("/enhance/units", response_model=EnhanceUnitsResponse, status_code=status.HTTP_200_OK)

@@ -4,9 +4,9 @@ from typing import List, Dict, Any, Optional, Tuple
 
 # Define a structure for the section info we receive
 class SectionInfo: # Using a simple class or Pydantic BaseModel is fine
-    def __init__(self, sectionName: str, pageRange: str):
-        self.sectionName = sectionName
-        self.pageRange = pageRange
+    def __init__(self, section_name: str, page_range: str):
+        self.section_name = section_name
+        self.page_range = page_range
 
 class PdfSplitterService:
     def split_pdf_by_sections(self, pdf_stream: io.BytesIO, sections: List[Dict[str, str]]) -> List[Dict[str, Any]]:
@@ -15,10 +15,10 @@ class PdfSplitterService:
 
         Args:
             pdf_stream: An io.BytesIO stream containing the original PDF content.
-            sections: A list of dictionaries, each with 'sectionName' and 'pageRange'.
+            sections: A list of dictionaries, each with 'section_name' and 'page_range'.
 
         Returns:
-            A list of dictionaries, each containing 'sectionName', 'fileName',
+            A list of dictionaries, each containing 'section_name', 'fileName',
             and 'fileContent' (io.BytesIO stream) for each successfully split section.
         """
         split_files_info = []
@@ -38,11 +38,11 @@ class PdfSplitterService:
             print(f"PdfSplitter: Opened original PDF with {num_original_pages} pages.")
 
             for section in sections:
-                section_name = section.get("sectionName", "UnknownSection").replace('/', '_').replace('\\', '_') # Sanitize name for filename
-                page_range_str = section.get("pageRange")
+                section_name = section.get("section_name", "UnknownSection").replace('/', '_').replace('\\', '_') # Sanitize name for filename
+                page_range_str = section.get("page_range")
 
                 if not page_range_str:
-                    print(f"PdfSplitter: Skipping section '{section_name}' due to missing pageRange.")
+                    print(f"PdfSplitter: Skipping section '{section_name}' due to missing page_range.")
                     continue
 
                 try:
@@ -85,14 +85,14 @@ class PdfSplitterService:
                     suggested_file_name = f"{section_name}.pdf" # Original name prepended later
 
                     split_files_info.append({
-                        "sectionName": section_name, # Keep original section name for reference
+                        "section_name": section_name, # Keep original section name for reference
                         "fileName": suggested_file_name,
                         "fileContent": section_stream
                     })
                     print(f"PdfSplitter: Successfully split and saved section '{section_name}'.")
 
                 except ValueError:
-                    print(f"PdfSplitter: Skipping section '{section_name}' due to unparseable pageRange: {page_range_str}.")
+                    print(f"PdfSplitter: Skipping section '{section_name}' due to unparseable page_range: {page_range_str}.")
                 except Exception as split_ex:
                     print(f"PdfSplitter: Error splitting section '{section_name}' with range {page_range_str}: {split_ex}")
                     # Continue with other sections
