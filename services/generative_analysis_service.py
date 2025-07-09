@@ -408,10 +408,10 @@ class GenerativeAnalysisService:
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "sectionName": {"type": "string"},
-                                    "pageRange": {"type": "string"}
+                                    "section_name": {"type": "string"},
+                                    "page_range": {"type": "string"}
                                 },
-                                "required": ["sectionName", "pageRange"]
+                                "required": ["section_name", "page_range"]
                             }
                         }
                     }
@@ -491,8 +491,8 @@ class GenerativeAnalysisService:
             for section in sections:
                 if isinstance(section, dict):
                     normalized_section = {
-                        'sectionName': section.get('sectionName', section.get('name', 'Unknown Section')),
-                        'pageRange': section.get('pageRange', section.get('page_range', ''))
+                        'section_name': section.get('section_name', section.get('name', 'Unknown Section')),
+                        'page_range': section.get('page_range', section.get('page_range', ''))
                     }
                     
                     normalized_sections.append(normalized_section)
@@ -529,8 +529,8 @@ class GenerativeAnalysisService:
                 page_range = match[1].strip() if match[1] else ""
                 
                 sections.append({
-                    'sectionName': section_name,
-                    'pageRange': page_range
+                    'section_name': section_name,
+                    'page_range': page_range
                 })
             
             return sections if sections else None

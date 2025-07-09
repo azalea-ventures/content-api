@@ -108,16 +108,16 @@ After processing:
 ### Request Format (Unchanged)
 ```json
 {
-  "originalDriveFileId": "your_file_id",
-  "originalDriveFileName": "document.pdf",
+  "storage_file_id": "your_file_id",
+  "file_name": "document.pdf",
   "sections": [
     {
-      "sectionName": "Introduction",
-      "pageRange": "1-3"
+      "section_name": "Introduction",
+      "page_range": "1-3"
     },
     {
-      "sectionName": "Main Content", 
-      "pageRange": "4-6"
+      "section_name": "Main Content", 
+      "page_range": "4-6"
     }
   ],
   "prompt": {
@@ -131,12 +131,12 @@ After processing:
 ```json
 {
   "success": true,
-  "originalDriveFileId": "your_file_id",
-  "originalDriveFileName": "document.pdf",
+  "storage_file_id": "your_file_id",
+  "file_name": "document.pdf",
   "sections": [
     {
-      "sectionName": "Introduction",
-      "pageRange": "1-3",
+      "section_name": "Introduction",
+      "page_range": "1-3",
       "prompts": [
         {
           "prompt_name": "extract_key_points",

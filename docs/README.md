@@ -132,12 +132,12 @@ The API exposes the following endpoints:
 *   **Request Body:** `ExtractRequest` object. See [`models.py`](./models.py) for the `ExtractRequest` structure.
     ```json
     {
-        "originalDriveFileId": "google_drive_pdf_file_id_to_extract_from",
-        "originalDriveFileName": "document.pdf",
-        "originalDriveParentFolderId": "parent_folder_id",
+        "storage_file_id": "google_drive_pdf_file_id_to_extract_from",
+        "file_name": "document.pdf",
+        "storage_parent_folder_id": "parent_folder_id",
         "section": {
-            "sectionName": "Introduction",
-            "pageRange": "1-3",
+            "section_name": "Introduction",
+            "page_range": "1-3",
             "pages": [
                 {"pageNumber": 1, "pageLabel": "1"},
                 {"pageNumber": 2, "pageLabel": "2"},
@@ -165,12 +165,12 @@ The API exposes the following endpoints:
     ```json
     {
         "success": true,
-        "originalDriveFileId": "your_file_id",
-        "originalDriveFileName": "document.pdf",
-        "originalDriveParentFolderId": "parent_folder_id",
+        "storage_file_id": "your_file_id",
+        "file_name": "document.pdf",
+        "storage_parent_folder_id": "parent_folder_id",
         "section": {
-            "sectionName": "Introduction",
-            "pageRange": "1-3",
+            "section_name": "Introduction",
+            "page_range": "1-3",
             "pages": [
                 {"pageNumber": 1, "pageLabel": "1"},
                 {"pageNumber": 2, "pageLabel": "2"},
@@ -216,7 +216,7 @@ The API exposes the following endpoints:
     ```json
     // Example AnalyzeRequestItem
     {
-        "file_id": "google_drive_pdf_file_id_to_analyze",
+        "storage_file_id": "google_drive_pdf_file_id_to_analyze",
         "prompt_text": "Identify the main sections of this document and their page ranges.",
         "genai_file_name": "optional_existing_gemini_file_name"
     }
@@ -237,21 +237,21 @@ The API exposes the following endpoints:
     ```json
     // Example SplitRequest
     {
-        "originalDriveFileId": "google_drive_pdf_file_id_to_split",
-        "originalDriveFileName": "optional_original_file_name",
-        "originalDriveParentFolderId": "google_drive_folder_id_for_output",
+        "storage_file_id": "google_drive_pdf_file_id_to_split",
+        "file_name": "optional_original_file_name",
+        "storage_parent_folder_id": "google_drive_folder_id_for_output",
         "sections": [
             {
-                "sectionName": "Introduction",
-                "pageRange": "1-3"
+                "section_name": "Introduction",
+                "page_range": "1-3"
             },
             {
-                "sectionName": "Main Content",
-                "pageRange": "4-10"
+                "section_name": "Main Content",
+                "page_range": "4-10"
             },
             {
-                "sectionName": "Conclusion",
-                "pageRange": "11-12"
+                "section_name": "Conclusion",
+                "page_range": "11-12"
             }
         ]
     }
@@ -307,13 +307,13 @@ This endpoint accepts the `result` property from the `/analyze` response directl
 **Request Body:** The `result` property from the `/analyze` response (type: `AnalyzeResponseItemSuccess`)
 ```json
 {
-  "originalDriveFileId": "your_file_id",
-  "originalDriveFileName": "document.pdf",
-  "originalDriveParentFolderId": "parent_folder_id",
+  "storage_file_id": "your_file_id",
+  "file_name": "document.pdf",
+  "storage_parent_folder_id": "parent_folder_id",
   "sections": [
     {
-      "sectionName": "Introduction",
-      "pageRange": "1-3",
+      "section_name": "Introduction",
+      "page_range": "1-3",
       "pages": [
         {"pageNumber": 1, "pageLabel": "1"},
         {"pageNumber": 2, "pageLabel": "2"},
@@ -329,13 +329,13 @@ This endpoint accepts the `result` property from the `/analyze` response directl
 {
   "success": true,
   "result": {
-    "originalDriveFileId": "your_file_id",
-    "originalDriveFileName": "document.pdf",
-    "originalDriveParentFolderId": "parent_folder_id",
+    "storage_file_id": "your_file_id",
+    "file_name": "document.pdf",
+    "storage_parent_folder_id": "parent_folder_id",
     "sections": [
       {
-        "sectionName": "Introduction",
-        "pageRange": "1-3",
+        "section_name": "Introduction",
+        "page_range": "1-3",
         "pages": [
           {"pageNumber": 1, "pageLabel": "1"},
           {"pageNumber": 2, "pageLabel": "2"},

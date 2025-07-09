@@ -72,18 +72,18 @@ for section in sections:
 ### Extract Request
 ```json
 {
-  "originalDriveFileId": "your_file_id",
-  "originalDriveFileName": "document.pdf",
-  "originalDriveParentFolderId": "parent_folder_id",
+  "storage_file_id": "your_file_id",
+  "file_name": "document.pdf",
+  "storage_parent_folder_id": "parent_folder_id",
   "genai_file_name": "files/abc123def456",  // Optional: reuse existing file
   "sections": [
     {
-      "sectionName": "Introduction",
-      "pageRange": "1-3"
+      "section_name": "Introduction",
+      "page_range": "1-3"
     },
     {
-      "sectionName": "Main Content", 
-      "pageRange": "4-6"
+      "section_name": "Main Content", 
+      "page_range": "4-6"
     }
   ],
   "prompt": {
@@ -97,13 +97,13 @@ for section in sections:
 ```json
 {
   "success": true,
-  "originalDriveFileId": "your_file_id",
-  "originalDriveFileName": "document.pdf",
-  "originalDriveParentFolderId": "parent_folder_id",
+  "storage_file_id": "your_file_id",
+  "file_name": "document.pdf",
+  "storage_parent_folder_id": "parent_folder_id",
   "sections": [
     {
-      "sectionName": "Introduction",
-      "pageRange": "1-3",
+      "section_name": "Introduction",
+      "page_range": "1-3",
       "prompts": [
         {
           "prompt_name": "extract_key_points",
@@ -113,8 +113,8 @@ for section in sections:
       ]
     },
     {
-      "sectionName": "Main Content",
-      "pageRange": "4-6", 
+      "section_name": "Main Content",
+      "page_range": "4-6", 
       "prompts": [
         {
           "prompt_name": "extract_key_points",

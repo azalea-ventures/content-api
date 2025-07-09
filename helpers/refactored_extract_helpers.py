@@ -7,6 +7,7 @@ import uuid
 import re
 import traceback
 import asyncio
+import gc
 from collections import deque
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -30,8 +31,8 @@ from config import settings
 
 
 class RefactoredExtractionContext(BaseModel):
-    target_drive_file_id: str
-    target_drive_file_name: Optional[str] = None
+    storage_file_id: str
+    file_name: Optional[str] = None
     genai_file: Optional[genai_types_google.File] = None
     genai_file_name: Optional[str] = None
     # New fields for section-based extraction
@@ -45,6 +46,152 @@ class RefactoredExtractionContext(BaseModel):
     }
 
 
+async def process_extract_request_with_preloaded_files(
+    request: ExtractRequest,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService,
+    pdf_splitter_service: PdfSplitterService
+) -> ExtractResponse:
+    """
+    Process extract request using pre-loaded files from split operation.
+    This eliminates the need for splitting in the extract endpoint.
+    """
+    print(f"Processing extract request with pre-loaded files for file: {request.storage_file_id}")
+    
+    try:
+        # Check if sections have genai_file_name (indicating they were pre-loaded)
+        sections_with_genai_files = []
+        sections_without_genai_files = []
+        
+        for section in request.sections:
+            if section.genai_file_name:
+                sections_with_genai_files.append(section)
+            else:
+                sections_without_genai_files.append(section)
+        
+        if sections_without_genai_files:
+            print(f"Warning: {len(sections_without_genai_files)} sections don't have genai_file_name. These will be skipped.")
+            for section in sections_without_genai_files:
+                print(f"  - Section '{section.section_name}' missing genai_file_name")
+        
+        if not sections_with_genai_files:
+            return ExtractResponse(
+                success=False,
+                storage_file_id=request.storage_file_id,
+                file_name=request.file_name,
+                storage_parent_folder_id=request.storage_parent_folder_id,
+                sections=request.sections,
+                prompt=request.prompt,
+                error="No sections have pre-loaded genai_file_name. Please run /split first."
+            )
+        
+        # Process each section with pre-loaded files
+        processed_sections = []
+        api_retry_queue = deque()
+        
+        for section in sections_with_genai_files:
+            print(f"Processing section '{section.section_name}' with genai_file_name: {section.genai_file_name}")
+            
+            # Get the pre-loaded file from Gemini AI
+            try:
+                genai_file = await gemini_analysis_service.get_file_by_name(section.genai_file_name)
+                if not genai_file:
+                    print(f"Warning: Could not retrieve file '{section.genai_file_name}' from Gemini AI for section '{section.section_name}'")
+                    # Create a section with error result
+                    error_prompt = SectionExtractPrompt(
+                        prompt_name=request.prompt.prompt_name,
+                        prompt_text=request.prompt.prompt_text,
+                        result=f"Error: Could not retrieve pre-loaded file '{section.genai_file_name}' from Gemini AI"
+                    )
+                    processed_section = section.model_copy(deep=True)
+                    processed_section.prompts = [error_prompt]
+                    processed_sections.append(processed_section)
+                    continue
+                
+                # Execute the prompt for this section
+                section_context = f"Focus on the section '{section.section_name}' when extracting information."
+                section_number = ""
+                section_number_match = re.search(r'(\d+)', section.section_name)
+                if section_number_match:
+                    section_number = f"Section number: {section_number_match.group(1)}. "
+                
+                final_instructions = f"{section_context}\n{section_number}\n\n{request.prompt.prompt_text}"
+                final_instructions += f"\n\nEnsure the output is ONLY the requested information for this specific section."
+                
+                multimodal_prompt_parts = [
+                    genai_file,
+                    final_instructions
+                ]
+                
+                # Execute the API call
+                response = await gemini_analysis_service.model.generate_content_async(multimodal_prompt_parts)
+                
+                if response and response.text:
+                    result_text = response.text
+                    status = "SUCCESS"
+                else:
+                    result_text = "No response received from Gemini AI"
+                    status = "ERROR"
+                
+                # Create the result prompt
+                result_prompt = SectionExtractPrompt(
+                    prompt_name=request.prompt.prompt_name,
+                    prompt_text=request.prompt.prompt_text,
+                    result=result_text
+                )
+                
+                # Create the processed section
+                processed_section = section.model_copy(deep=True)
+                processed_section.prompts = [result_prompt]
+                processed_sections.append(processed_section)
+                
+                print(f"Successfully processed section '{section.section_name}'")
+                
+            except Exception as e:
+                print(f"Error processing section '{section.section_name}': {e}")
+                traceback.print_exc()
+                
+                # Create a section with error result
+                error_prompt = SectionExtractPrompt(
+                    prompt_name=request.prompt.prompt_name,
+                    prompt_text=request.prompt.prompt_text,
+                    result=f"Error processing section: {str(e)}"
+                )
+                processed_section = section.model_copy(deep=True)
+                processed_section.prompts = [error_prompt]
+                processed_sections.append(processed_section)
+        
+        # Create the final response
+        result_prompt = SectionExtractPrompt(
+            prompt_name=request.prompt.prompt_name,
+            prompt_text=request.prompt.prompt_text,
+            result="Processing completed for all sections"
+        )
+        
+        return ExtractResponse(
+            success=True,
+            storage_file_id=request.storage_file_id,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
+            sections=processed_sections,
+            prompt=result_prompt,
+            genai_file_name=None  # Not needed for this workflow
+        )
+        
+    except Exception as e:
+        print(f"Error in process_extract_request_with_preloaded_files: {e}")
+        traceback.print_exc()
+        return ExtractResponse(
+            success=False,
+            storage_file_id=request.storage_file_id,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
+            sections=request.sections,
+            prompt=request.prompt,
+            error=f"Internal error: {str(e)}"
+        )
+
+
 async def _split_and_upload_sections(
     extraction_ctx: RefactoredExtractionContext,
     storage_service: StorageService,
@@ -54,10 +201,10 @@ async def _split_and_upload_sections(
 ) -> bool:
     """Split PDF into sections and upload each section as a separate file to Gemini AI"""
     try:
-        print(f"Splitting PDF into {len(sections)} sections for file ID: {extraction_ctx.target_drive_file_id}")
+        print(f"Splitting PDF into {len(sections)} sections for file ID: {extraction_ctx.storage_file_id}")
         
         # Download the original PDF
-        original_pdf_stream = storage_service.download_file_content(extraction_ctx.target_drive_file_id)
+        original_pdf_stream = storage_service.download_file_content(extraction_ctx.storage_file_id)
         if not original_pdf_stream or original_pdf_stream.getbuffer().nbytes == 0:
             print("Failed to download original PDF for splitting")
             return False
@@ -65,8 +212,8 @@ async def _split_and_upload_sections(
         # Convert sections to the format expected by the PDF splitter
         sections_for_splitting = [
             {
-                "sectionName": section.sectionName,
-                "pageRange": section.pageRange
+                "section_name": section.section_name,
+                "page_range": section.page_range
             }
             for section in sections
         ]
@@ -84,10 +231,10 @@ async def _split_and_upload_sections(
             return False
         
         # Upload each section to Gemini AI
-        base_filename = os.path.splitext(extraction_ctx.target_drive_file_name or "document")[0]
+        base_filename = os.path.splitext(extraction_ctx.file_name or "document")[0]
         
         for split_result in split_results:
-            section_name = split_result["sectionName"]
+            section_name = split_result["section_name"]
             pdf_stream = split_result["fileContent"]
             
             # Create a unique display name for this section
@@ -156,7 +303,7 @@ async def _execute_section_extraction_api_call(
     api_retry_queue: deque
 ) -> bool:
     """Execute API call for a single prompt on a section using section-specific files"""
-    target_id_log = extraction_ctx.target_drive_file_id
+    target_id_log = extraction_ctx.storage_file_id
     print(f"API Call (Section Extract): Section '{section_name}', Prompt '{prompt.prompt_name}', API Attempt {api_attempt_count + 1}.")
 
     # Get the section-specific Gemini file
@@ -241,7 +388,7 @@ async def _execute_section_extraction_api_call_concurrent(
     api_attempt_count: int
 ) -> Dict[str, Any]:
     """Execute API call for a single prompt on a section - concurrent version with section files"""
-    target_id_log = extraction_ctx.target_drive_file_id
+    target_id_log = extraction_ctx.storage_file_id
     print(f"API Call (Concurrent Section Extract): Section '{section_name}', Prompt '{prompt.prompt_name}', API Attempt {api_attempt_count + 1}.")
 
     # Get the section-specific Gemini file
@@ -352,10 +499,10 @@ async def _get_or_upload_genai_file(
                 print(f"Gemini AI file not found: {genai_file_name}. Will proceed with normal upload.")
         
         # If no existing file found, upload the file
-        print(f"Uploading file to Gemini AI: {extraction_ctx.target_drive_file_id}")
+        print(f"Uploading file to Gemini AI: {extraction_ctx.storage_file_id}")
         uploaded_file = await gemini_service.upload_pdf_for_analysis_by_file_id(
-            extraction_ctx.target_drive_file_id,
-            extraction_ctx.target_drive_file_name or "document.pdf",
+            extraction_ctx.storage_file_id,
+            extraction_ctx.file_name or "document.pdf",
             storage_service
         )
         
@@ -382,11 +529,11 @@ async def process_extract_request(
 ) -> ExtractResponse:
     """Process the extract request using section-based PDF splitting approach"""
     
-    target_file_id = request.originalDriveFileId
+    target_file_id = request.storage_file_id
     print(f"Processing Extract Request for file ID: {target_file_id}")
 
-    extraction_ctx = RefactoredExtractionContext(target_drive_file_id=target_file_id)
-    extraction_ctx.target_drive_file_name = request.originalDriveFileName
+    extraction_ctx = RefactoredExtractionContext(storage_file_id=target_file_id)
+    extraction_ctx.file_name = request.file_name
 
     try:
         # Split PDF into sections and upload each section to Gemini AI
@@ -400,8 +547,8 @@ async def process_extract_request(
             return ExtractResponse(
                 success=False,
                 originalDriveFileId=target_file_id,
-                originalDriveFileName=request.originalDriveFileName,
-                originalDriveParentFolderId=request.originalDriveParentFolderId,
+                file_name=request.file_name,
+                storage_parent_folder_id=request.storage_parent_folder_id,
                 sections=request.sections,
                 prompt=request.prompt,
                 error="Failed to split and upload sections to Gemini AI",
@@ -422,8 +569,8 @@ async def process_extract_request(
             )
             data_dependency_deferred_queue.append({
                 "type": "extract_data_dependency",
-                "section_name": section.sectionName,
-                "page_range": section.pageRange,
+                "section_name": section.section_name,
+                "page_range": section.page_range,
                 "prompt": section_prompt,
                 "section": section,
                 "dd_attempt_count": 0
@@ -480,8 +627,8 @@ async def process_extract_request(
                     api_call_requeued = await _execute_section_extraction_api_call(
                         gemini_analysis_service,
                         extraction_ctx,
-                        section.sectionName,
-                        section.pageRange,
+                        section.section_name,
+                        section.page_range,
                         prompt,
                         0,
                         api_retry_queue
@@ -521,8 +668,8 @@ async def process_extract_request(
         return ExtractResponse(
             success=True,
             originalDriveFileId=target_file_id,
-            originalDriveFileName=request.originalDriveFileName,
-            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
             sections=request.sections,
             prompt=request.prompt,
             genai_file_name=None  # No single genai_file_name when using section splitting
@@ -538,8 +685,8 @@ async def process_extract_request(
         return ExtractResponse(
             success=False,
             originalDriveFileId=target_file_id,
-            originalDriveFileName=request.originalDriveFileName,
-            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
             sections=request.sections,
             prompt=request.prompt,
             error=f"An internal server error occurred during extraction: {str(ex)}",
@@ -555,11 +702,11 @@ async def process_refactored_extract_request(
 ) -> RefactoredExtractResponse:
     """Process the refactored extract request using section-based PDF splitting approach"""
     
-    target_file_id = request.originalDriveFileId
+    target_file_id = request.storage_file_id
     print(f"Processing Refactored Extract Request for file ID: {target_file_id}")
 
-    extraction_ctx = RefactoredExtractionContext(target_drive_file_id=target_file_id)
-    extraction_ctx.target_drive_file_name = request.originalDriveFileName
+    extraction_ctx = RefactoredExtractionContext(storage_file_id=target_file_id)
+    extraction_ctx.file_name = request.file_name
 
     try:
         # Split PDF into sections and upload each section to Gemini AI
@@ -585,8 +732,8 @@ async def process_refactored_extract_request(
                 # Use the existing prompts from the section
                 section_with_prompts = SectionWithPrompts(
                     prompts=section.prompts,
-                    pageRange=section.pageRange,
-                    sectionName=section.sectionName
+                    page_range=section.page_range,
+                    section_name=section.section_name
                 )
             else:
                 # Create a default extraction prompt for sections without prompts
@@ -596,16 +743,16 @@ async def process_refactored_extract_request(
                 )
                 section_with_prompts = SectionWithPrompts(
                     prompts=[default_prompt],
-                    pageRange=section.pageRange,
-                    sectionName=section.sectionName
+                    page_range=section.page_range,
+                    section_name=section.section_name
                 )
             sections_with_prompts.append(section_with_prompts)
 
         # Create the transformed request structure
         transformed_request = AnalyzeResultWithPrompts(
             originalDriveFileId=request.originalDriveFileId,
-            originalDriveFileName=request.originalDriveFileName,
-            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
             sections=sections_with_prompts
         )
 
@@ -618,8 +765,8 @@ async def process_refactored_extract_request(
             for prompt in section.prompts:
                 data_dependency_deferred_queue.append({
                     "type": "refactored_extraction_data_dependency",
-                    "section_name": section.sectionName,
-                    "page_range": section.pageRange,
+                    "section_name": section.section_name,
+                    "page_range": section.page_range,
                     "prompt": prompt,
                     "dd_attempt_count": 0
                 })
@@ -733,11 +880,11 @@ async def process_extract_request_concurrent(
 ) -> ExtractResponse:
     """Process the extract request using concurrent API calls with section-based PDF splitting"""
     
-    target_file_id = request.originalDriveFileId
+    target_file_id = request.storage_file_id
     print(f"Processing Concurrent Extract Request for file ID: {target_file_id}")
 
-    extraction_ctx = RefactoredExtractionContext(target_drive_file_id=target_file_id)
-    extraction_ctx.target_drive_file_name = request.originalDriveFileName
+    extraction_ctx = RefactoredExtractionContext(storage_file_id=target_file_id)
+    extraction_ctx.file_name = request.file_name
 
     try:
         # Split PDF into sections and upload each section to Gemini AI
@@ -751,8 +898,8 @@ async def process_extract_request_concurrent(
             return ExtractResponse(
                 success=False,
                 originalDriveFileId=target_file_id,
-                originalDriveFileName=request.originalDriveFileName,
-                originalDriveParentFolderId=request.originalDriveParentFolderId,
+                file_name=request.file_name,
+                storage_parent_folder_id=request.storage_parent_folder_id,
                 sections=request.sections,
                 prompt=request.prompt,
                 error="Failed to split and upload sections to Gemini AI",
@@ -779,8 +926,8 @@ async def process_extract_request_concurrent(
             task = _execute_section_extraction_api_call_concurrent(
                 gemini_analysis_service,
                 extraction_ctx,
-                section.sectionName,
-                section.pageRange,
+                section.section_name,
+                section.page_range,
                 section_prompt,
                 0  # Initial attempt
             )
@@ -798,10 +945,10 @@ async def process_extract_request_concurrent(
             if isinstance(result, Exception):
                 # Handle unexpected exceptions
                 section = request.sections[i]
-                print(f"Exception in concurrent call for section '{section.sectionName}': {result}")
+                print(f"Exception in concurrent call for section '{section.section_name}': {result}")
                 failed_tasks.append({
-                    "section_name": section.sectionName,
-                    "page_range": section.pageRange,
+                    "section_name": section.section_name,
+                    "page_range": section.page_range,
                     "prompt": section.prompts[i] if section.prompts else None,
                     "error": str(result),
                     "api_attempt_count": 0
@@ -811,7 +958,7 @@ async def process_extract_request_concurrent(
                     rate_limit_hit = True
                     failed_tasks.append({
                         "section_name": result["section_name"],
-                        "page_range": request.sections[i].pageRange,
+                        "page_range": request.sections[i].page_range,
                         "prompt": result["prompt"],
                         "api_attempt_count": result.get("api_attempt_count", 0)
                     })
@@ -852,8 +999,8 @@ async def process_extract_request_concurrent(
         return ExtractResponse(
             success=True,
             originalDriveFileId=target_file_id,
-            originalDriveFileName=request.originalDriveFileName,
-            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
             sections=request.sections,
             prompt=request.prompt,
             genai_file_name=None  # No single genai_file_name when using section splitting
@@ -869,10 +1016,209 @@ async def process_extract_request_concurrent(
         return ExtractResponse(
             success=False,
             originalDriveFileId=target_file_id,
-            originalDriveFileName=request.originalDriveFileName,
-            originalDriveParentFolderId=request.originalDriveParentFolderId,
+            file_name=request.file_name,
+            storage_parent_folder_id=request.storage_parent_folder_id,
             sections=request.sections,
             prompt=request.prompt,
             error=f"An internal server error occurred during extraction: {str(ex)}",
             genai_file_name=None
         ) 
+
+
+async def _process_section_memory_efficient(
+    section: Any,
+    storage_file_id: str,
+    storage_service: StorageService,
+    gemini_service: GenerativeAnalysisService,
+    pdf_splitter_service: PdfSplitterService,
+    prompt: SectionExtractPrompt,
+    base_filename: str
+) -> Tuple[bool, str]:
+    """
+    Process a single section with immediate cleanup to prevent memory issues.
+    Returns (success, result_or_error)
+    """
+    section_name = section.section_name
+    page_range = section.page_range
+    
+    try:
+        print(f"Processing section '{section_name}' with memory-efficient approach")
+        
+        # Download the original PDF using the passed storage_file_id
+        original_pdf_stream = storage_service.download_file_content(storage_file_id)
+        if not original_pdf_stream or original_pdf_stream.getbuffer().nbytes == 0:
+            return False, "Failed to download original PDF"
+        
+        try:
+            # Split only this section
+            sections_for_splitting = [
+                {
+                    "section_name": section_name,
+                    "page_range": page_range
+                }
+            ]
+            
+            # Split the PDF into this single section
+            split_results = await asyncio.to_thread(
+                pdf_splitter_service.split_pdf_by_sections,
+                original_pdf_stream,
+                sections_for_splitting
+            )
+            
+            if not split_results:
+                return False, "PDF splitting failed for this section"
+            
+            # Get the section PDF stream
+            section_data = split_results[0]
+            section_pdf_stream = section_data["fileContent"]
+            
+            try:
+                # Create a unique display name for this section
+                unique_id = str(uuid.uuid4())[:8]
+                display_name = f"{base_filename}_{section_name}_{unique_id}.pdf"
+                
+                print(f"Uploading section '{section_name}' as '{display_name}' to Gemini AI")
+                
+                # Upload the section to Gemini AI
+                gemini_file = await gemini_service.upload_pdf_for_analysis(section_pdf_stream, display_name)
+                
+                if not gemini_file:
+                    return False, f"Failed to upload section '{section_name}' to Gemini AI"
+                
+                try:
+                    # Process the section with the prompt
+                    section_context = f"Focus on the section '{section_name}' when extracting information."
+                    
+                    # Extract section number from section name if it contains a number
+                    section_number = ""
+                    section_number_match = re.search(r'(\d+)', section_name)
+                    if section_number_match:
+                        section_number = f"Section number: {section_number_match.group(1)}. "
+                    
+                    final_instructions = f"{section_context}\n{section_number}\n\n{prompt.prompt_text}"
+                    final_instructions += f"\n\nEnsure the output is ONLY the requested information for this specific section."
+
+                    multimodal_prompt_parts = [
+                        gemini_file,
+                        final_instructions
+                    ]
+
+                    # Execute the API call
+                    response = await gemini_service.model.generate_content_async(multimodal_prompt_parts)
+                    
+                    if response and response.text:
+                        result = response.text
+                        print(f"Successfully processed section '{section_name}'")
+                        return True, result
+                    else:
+                        return False, "No response text received from Gemini AI"
+                        
+                finally:
+                    # Clean up the Gemini AI file immediately
+                    try:
+                        await gemini_service.delete_file(gemini_file)
+                        print(f"Deleted section file '{section_name}' from Gemini AI")
+                    except Exception as e:
+                        print(f"Error deleting section file '{section_name}' from Gemini AI: {e}")
+                
+            finally:
+                # Clean up the section PDF stream immediately
+                try:
+                    section_pdf_stream.close()
+                    print(f"Closed PDF stream for section '{section_name}'")
+                except Exception as e:
+                    print(f"Error closing PDF stream for section '{section_name}': {e}")
+                
+        finally:
+            # Clean up the original PDF stream
+            try:
+                original_pdf_stream.close()
+                print(f"Closed original PDF stream for section '{section_name}'")
+            except Exception as e:
+                print(f"Error closing original PDF stream for section '{section_name}': {e}")
+        
+    except Exception as e:
+        error_msg = f"Error processing section '{section_name}': {str(e)}"
+        print(error_msg)
+        traceback.print_exc()
+        return False, error_msg
+    finally:
+        # Force garbage collection after each section if enabled
+        if settings.force_garbage_collection:
+            gc.collect()
+
+
+async def process_extract_request_memory_efficient(
+    request: ExtractRequest,
+    storage_service: StorageService,
+    gemini_analysis_service: GenerativeAnalysisService,
+    pdf_splitter_service: PdfSplitterService
+) -> ExtractResponse:
+    """
+    Process the extract request using memory-efficient sequential processing.
+    Each section is processed individually with immediate cleanup to prevent memory issues.
+    """
+    
+    target_file_id = request.storage_file_id
+    print(f"Processing Memory-Efficient Extract Request for file ID: {target_file_id}")
+
+    # Create a copy of sections to avoid modifying the original request
+    sections = request.sections.copy()
+    base_filename = os.path.splitext(request.file_name or "document")[0]
+    
+    # Process each section sequentially with immediate cleanup
+    processed_sections = []
+    
+    for i, section in enumerate(sections):
+        print(f"Processing section {i+1}/{len(sections)}: {section.section_name}")
+        
+        # Create a copy of the prompt for this section
+        section_prompt = SectionExtractPrompt(
+            prompt_name=request.prompt.prompt_name,
+            prompt_text=request.prompt.prompt_text,
+            result=None
+        )
+        
+        # Process this section - pass target_file_id directly
+        success, result = await _process_section_memory_efficient(
+            section,
+            target_file_id,
+            storage_service,
+            gemini_analysis_service,
+            pdf_splitter_service,
+            section_prompt,
+            base_filename
+        )
+        
+        if success:
+            section_prompt.result = result
+        else:
+            section_prompt.result = f"Error: {result}"
+        
+        # Create the processed section
+        processed_section = SectionWithPrompts(
+            section_name=section.section_name,
+            page_range=section.page_range,
+            prompts=[section_prompt]
+        )
+        processed_sections.append(processed_section)
+        
+        # Force garbage collection after each section if enabled
+        if settings.force_garbage_collection:
+            gc.collect()
+        
+        # Delay between section processing to prevent overwhelming the system
+        await asyncio.sleep(settings.section_processing_delay_seconds)
+    
+    print(f"Finished memory-efficient processing for file ID: {target_file_id}")
+    
+    return ExtractResponse(
+        success=True,
+        originalDriveFileId=target_file_id,
+        file_name=request.file_name,
+        storage_parent_folder_id=request.storage_parent_folder_id,
+        sections=processed_sections,
+        prompt=request.prompt,
+        error=None,
+        genai_file_name=None
+    ) 

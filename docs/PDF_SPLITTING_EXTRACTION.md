@@ -32,9 +32,9 @@ The extraction system has been refactored to use a more efficient PDF splitting 
 ```python
 # The system splits the PDF based on section page ranges
 sections_for_splitting = [
-    {"sectionName": "Introduction", "pageRange": "1-3"},
-    {"sectionName": "Main Content", "pageRange": "4-6"},
-    {"sectionName": "Conclusion", "pageRange": "7-8"}
+    {"section_name": "Introduction", "page_range": "1-3"},
+    {"section_name": "Main Content", "page_range": "4-6"},
+    {"section_name": "Conclusion", "page_range": "7-8"}
 ]
 
 split_results = pdf_splitter_service.split_pdf_by_sections(
@@ -47,7 +47,7 @@ split_results = pdf_splitter_service.split_pdf_by_sections(
 ```python
 # Each section is uploaded as a separate file to Gemini AI
 for split_result in split_results:
-    section_name = split_result["sectionName"]
+    section_name = split_result["section_name"]
     pdf_stream = split_result["fileContent"]
     display_name = f"{filename}_{section_name}_{unique_id}"
     
@@ -61,11 +61,11 @@ for split_result in split_results:
 ```python
 # Each section is processed independently with the extraction prompt
 for section in sections:
-    section_gemini_file = extraction_ctx.section_gemini_files[section.sectionName]
+    section_gemini_file = extraction_ctx.section_gemini_files[section.section_name]
     
     multimodal_prompt_parts = [
         section_gemini_file,
-        f"Focus on section '{section.sectionName}': {prompt_text}"
+        f"Focus on section '{section.section_name}': {prompt_text}"
     ]
     
     response = await gemini_service.model.generate_content_async(
@@ -88,17 +88,17 @@ for section_name, pdf_stream in extraction_ctx.section_pdf_streams.items():
 ### Extract Request
 ```json
 {
-  "originalDriveFileId": "your_file_id",
-  "originalDriveFileName": "document.pdf",
+  "storage_file_id": "your_file_id",
+  "file_name": "document.pdf",
   "sections": [
     {
-      "sectionName": "Introduction",
-      "pageRange": "1-3",
+      "section_name": "Introduction",
+      "page_range": "1-3",
       # pages field removed - no longer needed
     },
     {
-      "sectionName": "Main Content",
-      "pageRange": "4-6",
+      "section_name": "Main Content",
+      "page_range": "4-6",
       # pages field removed - no longer needed
     }
   ],
@@ -113,12 +113,12 @@ for section_name, pdf_stream in extraction_ctx.section_pdf_streams.items():
 ```json
 {
   "success": true,
-  "originalDriveFileId": "your_file_id",
-  "originalDriveFileName": "document.pdf",
+  "storage_file_id": "your_file_id",
+  "file_name": "document.pdf",
   "sections": [
     {
-      "sectionName": "Introduction",
-      "pageRange": "1-3",
+      "section_name": "Introduction",
+      "page_range": "1-3",
       # pages field removed - no longer needed
       "prompts": [
         {
@@ -129,8 +129,8 @@ for section_name, pdf_stream in extraction_ctx.section_pdf_streams.items():
       ]
     },
     {
-      "sectionName": "Main Content",
-      "pageRange": "4-6",
+      "section_name": "Main Content",
+      "page_range": "4-6",
       # pages field removed - no longer needed
       "prompts": [
         {

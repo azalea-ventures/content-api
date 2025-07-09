@@ -32,12 +32,12 @@ Concurrent processing is enabled by default! No additional configuration is need
 
 ```json
 {
-    "originalDriveFileId": "your_file_id",
-    "originalDriveFileName": "document.pdf",
+    "storage_file_id": "your_file_id",
+    "file_name": "document.pdf",
     "sections": [
-        {"sectionName": "Introduction", "pageRange": "1-3"},
-        {"sectionName": "Background", "pageRange": "4-6"},
-        {"sectionName": "Methodology", "pageRange": "7-9"}
+        {"section_name": "Introduction", "page_range": "1-3"},
+        {"section_name": "Background", "page_range": "4-6"},
+        {"section_name": "Methodology", "page_range": "7-9"}
     ],
     "prompt": {
         "prompt_name": "extract_key_points",
@@ -112,11 +112,11 @@ from helpers.refactored_extract_helpers import process_extract_request_concurren
 
 async def extract_concurrently():
     request = ExtractRequest(
-        originalDriveFileId="your_file_id",
+        storage_file_id="your_file_id",
         sections=[
-            SectionWithPages(sectionName="Section 1", pageRange="1-3"),
-            SectionWithPages(sectionName="Section 2", pageRange="4-6"),
-            SectionWithPages(sectionName="Section 3", pageRange="7-9"),
+            SectionWithPages(section_name="Section 1", page_range="1-3"),
+            SectionWithPages(section_name="Section 2", page_range="4-6"),
+            SectionWithPages(section_name="Section 3", page_range="7-9"),
         ],
         prompt=SectionExtractPrompt(
             prompt_name="extract_content",
