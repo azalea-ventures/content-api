@@ -49,7 +49,7 @@ from helpers.enhance_helpers import (
     _execute_api_call_for_prompt,
     get_or_create_output_item
 )
-from helpers.refactored_extract_helpers import process_refactored_extract_request, process_extract_request, process_extract_request_with_preloaded_files
+from helpers.refactored_extract_helpers import process_refactored_extract_request, process_extract_request, process_extract_request_with_preloaded_files, process_extract_request_with_preloaded_files_concurrent
 
 
 load_dotenv()
@@ -126,9 +126,8 @@ async def extract_endpoint(request: ExtractRequest):
 
     print(f"Extract request for file: {request.storage_file_id}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     
-    # Use the new pre-loaded files approach
-    from helpers.refactored_extract_helpers import process_extract_request_with_preloaded_files
-    result = await process_extract_request_with_preloaded_files(request, storage_service, gemini_analysis_service, pdf_splitter_service)
+    # Use concurrent processing with pre-loaded files approach
+    result = await process_extract_request_with_preloaded_files_concurrent(request, storage_service, gemini_analysis_service, pdf_splitter_service)
     
     print(f"Finished extract for file: {request.storage_file_id}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     return result
@@ -371,6 +370,26 @@ async def debug_files():
         }
     except Exception as e:
         print(f"Error during debug files request: {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": str(e)})
+
+@app.delete("/storage/clear", status_code=status.HTTP_200_OK)
+async def clear_google_ai_storage():
+    """Endpoint to clear all files from Google AI storage."""
+    if not gemini_analysis_service:
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "Generative Analysis service not initialized."})
+    
+    try:
+        # Clear all files from Google AI storage
+        result = await gemini_analysis_service.clear_all_files()
+        
+        if result["success"]:
+            return result
+        else:
+            return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=result)
+            
+    except Exception as e:
+        print(f"Error during storage clear request: {e}")
         traceback.print_exc()
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": str(e)})
 
