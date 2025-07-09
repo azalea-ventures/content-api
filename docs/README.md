@@ -15,12 +15,13 @@ This API provides services to analyze, extract, and enhance structured data from
   - [Split Documents](#split-documents)
   - [Enhance Lessons](#enhance-lessons)
 - [Environment Variables](#environment-variables)
+- [Additional Documentation](#additional-documentation)
 
 ## Features
 
 *   **Document Analysis**: Leverages multimodal generative AI to analyze content within PDF documents.
 *   **Structured Data Extraction**: Extracts specific information from PDFs based on a provided prompt and JSON schema.
-*   **PDF Splitting**: Splits PDF documents based on specified page ranges or criteria (handled by `PdfSplitterService`).
+*   **PDF Splitting**: Splits PDF documents based on specified page ranges or criteria (handled by `PdfSplitterService`) with memory-efficient batched processing.
 *   **Content Enhancement**: Augments lesson data using generative AI based on a series of prompts.
 *   **Batch Processing**: Supports batch operations for most endpoints to efficiently process multiple documents or requests.
 *   **Asynchronous Operations**: Utilizes `asyncio` for non-blocking I/O operations, improving performance for concurrent requests.
@@ -232,7 +233,7 @@ The API exposes the following endpoints:
 ### Split Documents
 
 *   **Endpoint:** `POST /split`
-*   **Description:** Splits a PDF document from Google Drive into multiple smaller PDF files based on specified page ranges and section names. The split parts are saved back to Google Drive.
+*   **Description:** Splits a PDF document from Google Drive into multiple smaller PDF files based on specified page ranges and section names. The split parts are uploaded to Gemini AI for processing. Features memory-efficient batched processing to handle large documents with many sections.
 *   **Request Body:** `SplitRequest` object. See [`models.py`](./models.py) for the `SplitRequest` structure.
     ```json
     // Example SplitRequest
@@ -257,7 +258,16 @@ The API exposes the following endpoints:
     }
     ```
 *   **Response (Success - 200 OK):** A `BatchSplitItemResult` object. See [`models.py`](./models.py) for details.
-*   **Dependencies:** `GoogleDriveService`, `PdfSplitterService`.
+*   **Dependencies:** `GoogleDriveService`, `PdfSplitterService`, `GenerativeAnalysisService`.
+*   **Key Features:**
+    - **Memory-Efficient Batching**: Processes sections in configurable batches (default: 5 sections per batch)
+    - **Automatic Cleanup**: Closes streams and performs garbage collection after each batch
+    - **Gemini AI Integration**: Uploads split sections directly to Gemini AI for processing
+    - **Configurable Performance**: Adjustable batch sizes and delays via environment variables
+    - **Error Isolation**: Failed batches don't prevent successful ones from completing
+*   **Configuration Options:**
+    - `SPLIT_BATCH_SIZE`: Number of sections to process in each batch (default: 5)
+    - `SPLIT_BATCH_DELAY_SECONDS`: Delay between batches for memory cleanup (default: 0.5)
 
 ### Enhance Lessons
 
@@ -370,5 +380,21 @@ The following environment variables are used by the application and should be de
 *   `GOOGLE_SERVICE_ACCOUNT_JSON`: Path to the Google Cloud service account JSON key file. This is essential for authenticating with Google Drive and other Google Cloud services.
 *   `GEMINI_API_KEY`: Your API key for accessing Google's Gemini models.
 *   `GEMINI_MODEL_ID`: The specific Gemini model to be used for generative tasks (e.g., `gemini-2.0-flash-latest`, `gemini-pro`).
+
+### Memory Management Configuration
+
+*   `SPLIT_BATCH_SIZE`: Number of sections to process in each batch for the split endpoint (default: 5)
+*   `SPLIT_BATCH_DELAY_SECONDS`: Delay between batches for memory cleanup (default: 0.5)
+*   `ENABLE_MEMORY_EFFICIENT_PROCESSING`: Enable memory-efficient processing for extract operations (default: true)
+*   `FORCE_GARBAGE_COLLECTION`: Force garbage collection after each section (default: true)
+
+## Additional Documentation
+
+For detailed information about specific features and implementations, see the following documentation files:
+
+*   [Split Batching Implementation](./SPLIT_BATCHING_IMPLEMENTATION.md) - Detailed guide to the memory-efficient batched processing for PDF splitting
+*   [Memory Management Improvements](./MEMORY_MANAGEMENT_IMPROVEMENTS.md) - Overview of memory management enhancements
+*   [Split/Extract Workflow](./SPLIT_EXTRACT_WORKFLOW.md) - Documentation of the split and extract workflow
+*   [Concurrent Processing](./CONCURRENT_PROCESSING.md) - Information about concurrent processing capabilities
 
 

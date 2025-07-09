@@ -151,7 +151,10 @@ async def split_documents_endpoint(request: SplitRequest):
     if not request:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No request body provided.")
     print(f"Split request: file_id={request.storage_file_id}")
-    result = await process_single_split_request(request, storage_service, pdf_splitter_service, gemini_analysis_service)
+    
+    # Use batched processing for memory efficiency
+    from helpers.split_helpers import process_single_split_request_batched
+    result = await process_single_split_request_batched(request, storage_service, pdf_splitter_service, gemini_analysis_service)
     print(f"Finished split for file_id={request.storage_file_id}.")
     return result
 
