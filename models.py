@@ -96,13 +96,15 @@ class SectionWithPages(BaseModel):
     """Represents a section with its page range (simplified without individual page objects)"""
     page_range: str
     section_name: str
-    prompts: Optional[List["SectionExtractPrompt"]] = None
+    result: Optional[str] = None  # Just store the result, not the entire prompt
     genai_file_name: Optional[str] = None  # NEW: Added for split/extract workflow
 
 # --- NEW REFACTORED EXTRACT MODELS ---
 
 class SectionExtractPrompt(BaseModel):
     """A prompt to be executed for a specific section"""
+    id: str
+    user_id: str
     prompt_name: str
     prompt_text: str
     result: Optional[str] = None  # Store the result directly on the prompt
@@ -142,7 +144,7 @@ class ExtractResponse(BaseModel):
     storage_file_id: str
     file_name: Optional[str] = None
     storage_parent_folder_id: Optional[str] = None
-    sections: List[SectionWithPages]  # Multiple processed sections
+    sections: List[SectionWithPages]  # Multiple processed sections with just results
     prompt: SectionExtractPrompt  # Single prompt with results
     error: Optional[str] = None
     genai_file_name: Optional[str] = None
