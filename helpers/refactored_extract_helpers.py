@@ -98,13 +98,8 @@ async def process_extract_request_with_preloaded_files(
                 if not genai_file:
                     print(f"Warning: Could not retrieve file '{section.genai_file_name}' from Gemini AI for section '{section.section_name}'")
                     # Create a section with error result
-                    error_prompt = SectionExtractPrompt(
-                        prompt_name=request.prompt.prompt_name,
-                        prompt_text=request.prompt.prompt_text,
-                        result=f"Error: Could not retrieve pre-loaded file '{section.genai_file_name}' from Gemini AI"
-                    )
                     processed_section = section.model_copy(deep=True)
-                    processed_section.prompts = [error_prompt]
+                    processed_section.result = f"Error: Could not retrieve pre-loaded file '{section.genai_file_name}' from Gemini AI"
                     processed_sections.append(processed_section)
                     continue
                 
@@ -133,16 +128,9 @@ async def process_extract_request_with_preloaded_files(
                     result_text = "No response received from Gemini AI"
                     status = "ERROR"
                 
-                # Create the result prompt
-                result_prompt = SectionExtractPrompt(
-                    prompt_name=request.prompt.prompt_name,
-                    prompt_text=request.prompt.prompt_text,
-                    result=result_text
-                )
-                
-                # Create the processed section
+                # Create the processed section with result
                 processed_section = section.model_copy(deep=True)
-                processed_section.prompts = [result_prompt]
+                processed_section.result = result_text
                 processed_sections.append(processed_section)
                 
                 print(f"Successfully processed section '{section.section_name}'")
@@ -152,17 +140,14 @@ async def process_extract_request_with_preloaded_files(
                 traceback.print_exc()
                 
                 # Create a section with error result
-                error_prompt = SectionExtractPrompt(
-                    prompt_name=request.prompt.prompt_name,
-                    prompt_text=request.prompt.prompt_text,
-                    result=f"Error processing section: {str(e)}"
-                )
                 processed_section = section.model_copy(deep=True)
-                processed_section.prompts = [error_prompt]
+                processed_section.result = f"Error processing section: {str(e)}"
                 processed_sections.append(processed_section)
         
         # Create the final response
         result_prompt = SectionExtractPrompt(
+            id=request.prompt.id,
+            user_id=request.prompt.user_id,
             prompt_name=request.prompt.prompt_name,
             prompt_text=request.prompt.prompt_text,
             result="Processing completed for all sections"
@@ -546,7 +531,7 @@ async def process_extract_request(
         ):
             return ExtractResponse(
                 success=False,
-                originalDriveFileId=target_file_id,
+                storage_file_id=target_file_id,
                 file_name=request.file_name,
                 storage_parent_folder_id=request.storage_parent_folder_id,
                 sections=request.sections,
@@ -563,6 +548,8 @@ async def process_extract_request(
         for section in request.sections:
             # Create a copy of the prompt for this section to avoid modifying the original
             section_prompt = SectionExtractPrompt(
+                id=request.prompt.id,
+                user_id=request.prompt.user_id,
                 prompt_name=request.prompt.prompt_name,
                 prompt_text=request.prompt.prompt_text,
                 result=None
@@ -667,7 +654,7 @@ async def process_extract_request(
         print(f"Finished processing extract for file ID: {target_file_id}")
         return ExtractResponse(
             success=True,
-            originalDriveFileId=target_file_id,
+            storage_file_id=target_file_id,
             file_name=request.file_name,
             storage_parent_folder_id=request.storage_parent_folder_id,
             sections=request.sections,
@@ -684,7 +671,7 @@ async def process_extract_request(
         
         return ExtractResponse(
             success=False,
-            originalDriveFileId=target_file_id,
+            storage_file_id=target_file_id,
             file_name=request.file_name,
             storage_parent_folder_id=request.storage_parent_folder_id,
             sections=request.sections,
@@ -738,6 +725,8 @@ async def process_refactored_extract_request(
             else:
                 # Create a default extraction prompt for sections without prompts
                 default_prompt = SectionExtractPrompt(
+                    id=str(uuid.uuid4()),
+                    user_id=str(uuid.uuid4()),  # Generate a default user_id
                     prompt_name="extract_content",
                     prompt_text="Extract all relevant content from this section, including any key information, data, or important details."
                 )
@@ -750,7 +739,7 @@ async def process_refactored_extract_request(
 
         # Create the transformed request structure
         transformed_request = AnalyzeResultWithPrompts(
-            originalDriveFileId=request.originalDriveFileId,
+            storage_file_id=request.storage_file_id,
             file_name=request.file_name,
             storage_parent_folder_id=request.storage_parent_folder_id,
             sections=sections_with_prompts
@@ -897,7 +886,7 @@ async def process_extract_request_concurrent(
         ):
             return ExtractResponse(
                 success=False,
-                originalDriveFileId=target_file_id,
+                storage_file_id=target_file_id,
                 file_name=request.file_name,
                 storage_parent_folder_id=request.storage_parent_folder_id,
                 sections=request.sections,
@@ -908,19 +897,18 @@ async def process_extract_request_concurrent(
 
         # Create tasks for all sections
         tasks = []
+        section_prompts = []  # Keep track of prompts for API calls
+        
         for section in request.sections:
             # Create a copy of the prompt for this section to avoid modifying the original
             section_prompt = SectionExtractPrompt(
+                id=request.prompt.id,
+                user_id=request.prompt.user_id,
                 prompt_name=request.prompt.prompt_name,
                 prompt_text=request.prompt.prompt_text,
                 result=None
             )
-            
-            # Add the prompt to the section's prompts array
-            if section.prompts is None:
-                section.prompts = []
-            if section_prompt not in section.prompts:
-                section.prompts.append(section_prompt)
+            section_prompts.append(section_prompt)
             
             # Create task for this section
             task = _execute_section_extraction_api_call_concurrent(
@@ -949,7 +937,7 @@ async def process_extract_request_concurrent(
                 failed_tasks.append({
                     "section_name": section.section_name,
                     "page_range": section.page_range,
-                    "prompt": section.prompts[i] if section.prompts else None,
+                    "prompt": section_prompts[i],
                     "error": str(result),
                     "api_attempt_count": 0
                 })
@@ -994,14 +982,24 @@ async def process_extract_request_concurrent(
         # Clean up section files
         await _cleanup_section_files(extraction_ctx, gemini_analysis_service)
 
+        # Build the response with processed sections
+        processed_sections = []
+        for i, section in enumerate(request.sections):
+            processed_section = section.model_copy(deep=True)
+            if i < len(results) and not isinstance(results[i], Exception) and results[i]["success"]:
+                processed_section.result = results[i]["result"]
+            else:
+                processed_section.result = f"Error processing section"
+            processed_sections.append(processed_section)
+
         # Build the response
         print(f"Finished processing concurrent extract for file ID: {target_file_id}")
         return ExtractResponse(
             success=True,
-            originalDriveFileId=target_file_id,
+            storage_file_id=target_file_id,
             file_name=request.file_name,
             storage_parent_folder_id=request.storage_parent_folder_id,
-            sections=request.sections,
+            sections=processed_sections,
             prompt=request.prompt,
             genai_file_name=None  # No single genai_file_name when using section splitting
         )
@@ -1015,7 +1013,7 @@ async def process_extract_request_concurrent(
         
         return ExtractResponse(
             success=False,
-            originalDriveFileId=target_file_id,
+            storage_file_id=target_file_id,
             file_name=request.file_name,
             storage_parent_folder_id=request.storage_parent_folder_id,
             sections=request.sections,
@@ -1190,17 +1188,12 @@ async def process_extract_request_memory_efficient(
             base_filename
         )
         
+        # Create the processed section with result
+        processed_section = section.model_copy(deep=True)
         if success:
-            section_prompt.result = result
+            processed_section.result = result
         else:
-            section_prompt.result = f"Error: {result}"
-        
-        # Create the processed section
-        processed_section = SectionWithPrompts(
-            section_name=section.section_name,
-            page_range=section.page_range,
-            prompts=[section_prompt]
-        )
+            processed_section.result = f"Error: {result}"
         processed_sections.append(processed_section)
         
         # Force garbage collection after each section if enabled
@@ -1214,7 +1207,7 @@ async def process_extract_request_memory_efficient(
     
     return ExtractResponse(
         success=True,
-        originalDriveFileId=target_file_id,
+        storage_file_id=target_file_id,
         file_name=request.file_name,
         storage_parent_folder_id=request.storage_parent_folder_id,
         sections=processed_sections,
@@ -1270,21 +1263,33 @@ async def process_extract_request_with_preloaded_files_concurrent(
     for batch_start in range(0, len(sections_with_genai_files), batch_size):
         batch = sections_with_genai_files[batch_start:batch_start+batch_size]
         tasks = []
+        section_prompts = []  # Keep track of prompts for API calls
+        
         for section in batch:
             prompt = SectionExtractPrompt(
+                id=request.prompt.id,
+                user_id=request.prompt.user_id,
                 prompt_name=request.prompt.prompt_name,
                 prompt_text=request.prompt.prompt_text,
                 result=None
             )
-            section.prompts = [prompt]
+            section_prompts.append(prompt)
             tasks.append(_execute_section_extraction_with_preloaded_file(gemini_analysis_service, section, prompt))
+        
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        
         for i, result in enumerate(results):
             section = batch[i]
+            processed_section = section.model_copy(deep=True)
+            
             if isinstance(result, Exception) or not result.get("success"):
                 error = str(result) if isinstance(result, Exception) else result.get("error", "Unknown error")
-                section.prompts[0].result = f"Error: {error}"
-            processed_sections.append(section)
+                processed_section.result = f"Error: {error}"
+            else:
+                processed_section.result = result.get("result", "")
+            
+            processed_sections.append(processed_section)
+    
     return ExtractResponse(
         success=True,
         storage_file_id=request.storage_file_id,
