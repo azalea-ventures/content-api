@@ -182,6 +182,7 @@ class UploadedFileInfo(BaseModel):
     section_name: str
     page_range: str
     genai_file_name: Optional[str] = None  # NEW: Added for split/extract workflow
+    gcs_url: Optional[str] = None  # NEW: Added for GCS upload
 
 class SplitResponseItemSuccess(BaseModel):
     storage_file_id: str

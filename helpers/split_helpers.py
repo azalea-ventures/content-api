@@ -19,6 +19,7 @@ from models import (
 from services.google_drive_service import StorageService
 from services.pdf_splitter_service import PdfSplitterService
 from services.generative_analysis_service import GenerativeAnalysisService
+from services.google_cloud_storage_service import GoogleCloudStorageService
 from config import settings
 
 async def process_single_split_request(
@@ -200,7 +201,8 @@ async def process_single_split_request_batched(
     split_request: SplitRequest,
     storage_service: StorageService,
     pdf_splitter_service: PdfSplitterService,
-    gemini_service: Optional[GenerativeAnalysisService] = None
+    gemini_service: Optional[GenerativeAnalysisService] = None,
+    gcs_service: Optional[GoogleCloudStorageService] = None
 ) -> BatchSplitItemResult:
     """
     Process a split request using batched processing to manage memory usage.
@@ -299,7 +301,8 @@ async def process_single_split_request_batched(
                 batch_sections, 
                 sections_to_split_dicts, 
                 base_original_name, 
-                gemini_service
+                gemini_service,
+                gcs_service
             )
             uploaded_files_info.extend(batch_uploaded_files)
             
@@ -350,16 +353,18 @@ async def _process_upload_batch(
     batch_sections: List[Dict[str, Any]],
     original_sections: List[Any],
     base_original_name: str,
-    gemini_service: Optional[GenerativeAnalysisService]
+    gemini_service: Optional[GenerativeAnalysisService],
+    gcs_service: Optional[GoogleCloudStorageService] = None
 ) -> List[UploadedFileInfo]:
     """
-    Process a batch of sections for upload to Gemini AI.
+    Process a batch of sections for upload to Gemini AI and Google Cloud Storage.
     
     Args:
         batch_sections: List of section data from PDF splitter
         original_sections: Original section info for page range lookup
         base_original_name: Base filename for creating display names
         gemini_service: Gemini AI service for uploads
+        gcs_service: Google Cloud Storage service for uploads
         
     Returns:
         List of successfully uploaded file info
@@ -378,8 +383,10 @@ async def _process_upload_batch(
                 page_range = original_section.page_range
                 break
         
-        # Upload to Gemini AI only
+        # Upload to Gemini AI and Google Cloud Storage
         genai_file_name = None
+        gcs_url = None
+        
         if gemini_service:
             try:
                 # Create a unique display name for Gemini AI
@@ -407,13 +414,53 @@ async def _process_upload_batch(
         else:
             print(f"Warning: No Gemini service available for section '{section_name_raw}'")
         
+        # Upload to Google Cloud Storage
+        if gcs_service:
+            try:
+                # Create a unique filename for GCS
+                unique_id = str(uuid.uuid4())[:8]
+                gcs_filename = f"split_sections/{base_original_name}/{section_name_raw}_{unique_id}.pdf"
+                
+                print(f"Uploading section '{section_name_raw}' as '{gcs_filename}' to Google Cloud Storage")
+                
+                # Create a copy of the stream for GCS upload
+                section_file_stream_copy_gcs = io.BytesIO(section_file_stream.getvalue())
+                section_file_stream_copy_gcs.seek(0)
+                
+                # Add metadata for better organization
+                metadata = {
+                    'original_file': base_original_name,
+                    'section_name': section_name_raw,
+                    'page_range': page_range,
+                    'upload_type': 'split_section'
+                }
+                
+                gcs_url = gcs_service.upload_file_with_metadata(
+                    section_file_stream_copy_gcs, 
+                    gcs_filename, 
+                    metadata
+                )
+                
+                if gcs_url:
+                    print(f"Successfully uploaded section '{section_name_raw}' to GCS: {gcs_url}")
+                else:
+                    print(f"Failed to upload section '{section_name_raw}' to GCS")
+                
+                section_file_stream_copy_gcs.close()
+            except Exception as e:
+                print(f"Error uploading section '{section_name_raw}' to GCS: {e}")
+                traceback.print_exc()
+        else:
+            print(f"Warning: No GCS service available for section '{section_name_raw}'")
+        
         section_file_stream.close() # Close stream after upload
 
         if genai_file_name: # Check if Gemini AI upload was successful
             batch_uploaded_files.append(UploadedFileInfo(
                 section_name=section_name_raw,
                 page_range=page_range,
-                genai_file_name=genai_file_name
+                genai_file_name=genai_file_name,
+                gcs_url=gcs_url  # Add GCS URL to the response
             ))
         else:
             print(f"Failed to upload section '{section_name_raw}' to Gemini AI.")
