@@ -38,6 +38,7 @@ from services.supabase_storage_service import SupabaseStorageService
 from services.pdf_splitter_service import PdfSplitterService
 from services.pdf_text_extractor_service import PdfTextExtractorService
 from services.generative_analysis_service import GenerativeAnalysisService
+from services.google_cloud_storage_service import GoogleCloudStorageService
 import services.google_drive_service
 
 from helpers.analyze_helpers import process_single_analyze_request
@@ -67,6 +68,7 @@ storage_service: Optional[StorageService] = None
 pdf_splitter_service: Optional[PdfSplitterService] = None
 gemini_analysis_service: Optional[GenerativeAnalysisService] = None
 pdf_text_extractor_service: Optional[PdfTextExtractorService] = None
+google_cloud_storage_service: Optional[GoogleCloudStorageService] = None
 
 try:
     if settings.storage_backend == "google_drive":
@@ -100,6 +102,43 @@ try:
     # Initialize PDF splitter service
     pdf_splitter_service = PdfSplitterService()
     print("PDF Splitter service initialized.")
+    
+    # Initialize Google Cloud Storage service if configured
+    if settings.google_cloud_storage_bucket_name and settings.enable_gcs_upload:
+        try:
+            # Try to get credentials from Google Drive service first, then fall back to direct initialization
+            credentials_for_gcs = None
+            if storage_service and hasattr(storage_service, 'drive_service'):
+                # Get credentials from the existing Google Drive service
+                credentials_for_gcs = storage_service.drive_service._credentials
+                print("Using credentials from Google Drive service for GCS.")
+            elif settings.google_service_account_json_base64:
+                # Create credentials directly from the service account JSON
+                try:
+                    decoded_json_string = base64.b64decode(settings.google_service_account_json_base64).decode('utf-8')
+                    credentials_info = json.loads(decoded_json_string)
+                    credentials_for_gcs = Credentials.from_service_account_info(
+                        credentials_info, 
+                        scopes=['https://www.googleapis.com/auth/cloud-platform']
+                    )
+                    print("Created GCS credentials from service account JSON.")
+                except Exception as cred_error:
+                    print(f"Error creating GCS credentials from service account JSON: {cred_error}")
+                    credentials_for_gcs = None
+            
+            if credentials_for_gcs:
+                google_cloud_storage_service = GoogleCloudStorageService(
+                    credentials=credentials_for_gcs,
+                    bucket_name=settings.google_cloud_storage_bucket_name
+                )
+                print("Google Cloud Storage service initialized successfully.")
+            else:
+                print("Warning: Google Cloud Storage not initialized - no credentials available.")
+        except Exception as e:
+            print(f"Error initializing Google Cloud Storage service: {e}")
+            google_cloud_storage_service = None
+    else:
+        print("Google Cloud Storage upload disabled or not configured.")
     
     print("All available services initialized.")
 except Exception as e:
@@ -153,7 +192,13 @@ async def split_documents_endpoint(request: SplitRequest):
     
     # Use batched processing for memory efficiency
     from helpers.split_helpers import process_single_split_request_batched
-    result = await process_single_split_request_batched(request, storage_service, pdf_splitter_service, gemini_analysis_service)
+    result = await process_single_split_request_batched(
+        request, 
+        storage_service, 
+        pdf_splitter_service, 
+        gemini_analysis_service,
+        google_cloud_storage_service
+    )
     print(f"Finished split for file_id={request.storage_file_id}.")
     return result
 

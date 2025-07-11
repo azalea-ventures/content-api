@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     supabase_bucket_name: Optional[str] = None
     storage_backend: str = "supabase"  # Options: 'google_drive', 'supabase'
     
+    # Google Cloud Storage configuration
+    google_cloud_storage_bucket_name: Optional[str] = None
+    enable_gcs_upload: bool = True  # Enable GCS upload during split process
+    
     # New configuration options for better performance and stability
     max_file_size_mb: int = 50  # Maximum file size in MB
     gemini_timeout_seconds: int = 300  # Timeout for Gemini API calls
