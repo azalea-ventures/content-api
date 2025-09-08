@@ -10,6 +10,8 @@ import re
 from collections import deque
 from typing import List, Dict, Any, Optional, Tuple
 
+import requests
+
 from config import settings
 
 from dotenv import load_dotenv
@@ -170,6 +172,56 @@ async def extract_endpoint(request: ExtractRequest):
     
     print(f"Finished extract for file: {request.storage_file_id}, sections: {len(request.sections)}, prompt: {request.prompt.prompt_name}")
     return result
+
+
+@app.post("/extract/images", status_code=status.HTTP_200_OK)
+async def extract_images_endpoint(request: UploadedFileInfo):
+    result = {}
+    file_stream = google_cloud_storage_service.download_file_content(blob_name=request.gcs_url)
+
+    url = os.getenv('DOLPHIN_API_URL')
+
+    headers = {
+        'accept': 'application/json',
+        'Authorization': os.getenv('DOLPHIN_BEARER_TOKEN')
+    }
+    files = {
+        'file': (request.gcs_url, file_stream, 'application/pdf')
+    }
+    data = {
+        'include_figures': 'true'
+    }
+
+    # response = requests.post(url, headers=headers, files=files, data=data)
+    result = json.load(open("json_content.json"))
+    try:
+        for page in result.get('pages', []):
+            for element in page.get('elements', []):
+                if element.get('label') == 'fig':
+                    base64_data = element['figure_data']['base64_data']
+                    filename = element['figure_data']['filename']
+                    # Decode base64 to bytes
+                    image_bytes = base64.b64decode(base64_data.split(',')[1])
+                    # Create a file-like object from bytes
+                    image_stream = io.BytesIO(image_bytes)
+                    # Upload to Supabase (assuming supabase_storage_service has an upload_file method)
+                    # Adjust the method call based on the actual service implementation
+                    upload_result = storage_service.upload_file_to_folder(
+                        file_stream=image_stream,
+                        mime_type='image/png',
+                        file_name=filename,
+                        folder_id=request.gcs_url)
+                    
+                    # Fix: Handle upload_result as a dict and access 'url'
+                    if upload_result and isinstance(upload_result, dict):
+                        element['figure_data']['supabase_url'] = upload_result.get('url')
+                    else:
+                        print(f"Upload failed or returned invalid result for {filename}")
+    except Exception as e:
+        print(f"Error processing response from Dolphin API: {e}")
+       
+    return result
+
 
 @app.post("/analyze", response_model=BatchAnalyzeItemResult, status_code=status.HTTP_200_OK)
 async def analyze_documents_endpoint(request: AnalyzeRequestItem):
@@ -439,3 +491,4 @@ async def clear_google_ai_storage():
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": str(e)})
 
 # To run locally: uvicorn main:app --reload
+

@@ -148,3 +148,8 @@ test_**
 **_test.json
 scratch.json
 translate.csv
+PNG_COMPRESSION_README.md
+compress_png.py
+fep_icons/
+output/
+splitty-boi.json

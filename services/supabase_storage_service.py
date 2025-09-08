@@ -53,7 +53,7 @@ class SupabaseStorageService(StorageService):
             storage_path = f"{folder_id}/{file_name}"
             bucket_name = settings.supabase_bucket_name or "pdfs"  # Use configured bucket name or default to "pdfs"
             # Upload to Supabase Storage bucket
-            storage_response = self.supabase.storage.from_(bucket_name).upload(storage_path, file_stream, file_options={"content-type": mime_type, "upsert": True})
+            storage_response = self.supabase.storage.from_(bucket_name).upload(storage_path, file_stream.getvalue(), file_options={"content-type": mime_type})
             if not storage_response:
                 print(f"SupabaseStorageService: Failed to upload file to storage for {file_name}")
                 return None
@@ -69,8 +69,9 @@ class SupabaseStorageService(StorageService):
                 "user_id": folder_id,  # Assuming folder_id is user_id for this context
             }).execute()
             if insert_response.data and len(insert_response.data) > 0:
-                return insert_response.data[0]["id"]
+                # Fix: Return a dict with both ID and URL
+                return {"id": insert_response.data[0]["id"], "url": public_url}
             return None
         except Exception as e:
             print(f"SupabaseStorageService: Error uploading file {file_name}: {e}")
-            return None 
+            return None

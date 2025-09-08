@@ -3,6 +3,7 @@ import os
 from typing import Optional, Dict, Any
 from google.cloud import storage
 from google.oauth2.service_account import Credentials
+from urllib.parse import urlparse
 import base64
 import json
 
@@ -107,14 +108,9 @@ class GoogleCloudStorageService:
             # Upload the file stream
             blob.upload_from_file(file_stream, content_type=content_type)
             
-            # Get the public URL
-            public_url = blob.public_url
-            
             print(f"Successfully uploaded file to GCS with metadata: {destination_blob_name}")
-            print(f"Public URL: {public_url}")
-            print(f"Metadata: {metadata}")
             
-            return public_url
+            return destination_blob_name
             
         except Exception as e:
             print(f"Error uploading file with metadata to Google Cloud Storage: {e}")
@@ -140,6 +136,7 @@ class GoogleCloudStorageService:
             return False
     
     def file_exists(self, blob_name: str) -> bool:
+
         """
         Check if a file exists in Google Cloud Storage.
         
@@ -155,3 +152,36 @@ class GoogleCloudStorageService:
         except Exception as e:
             print(f"Error checking file existence in Google Cloud Storage: {e}")
             return False 
+        
+
+    def download_file_content(self, blob_name: str) -> Optional[io.BytesIO]:
+            """
+            Download file content from Google Cloud Storage using the public GCS URL.
+            
+            Args:
+                gcs_url: The public URL of the file in GCS (e.g., https://storage.googleapis.com/bucket_name/blob_name)
+                
+            Returns:
+                A BytesIO stream containing the file content, or None if download failed
+            """
+            try:
+                # Create blob object
+                blob = self.bucket.blob(blob_name)
+                
+                # Check if blob exists
+                if not blob.exists():
+                    print(f"Blob does not exist: {blob_name}")
+                    return None
+                
+                # Download to BytesIO
+                file_stream = io.BytesIO()
+                blob.download_to_file(file_stream)
+                file_stream.seek(0)  # Reset to beginning
+                
+                print(f"Successfully downloaded file from GCS: {blob_name}")
+                return file_stream
+                
+            except Exception as e:
+                print(f"Error downloading file from Google Cloud Storage: {e}")
+                return None
+            
